@@ -248,6 +248,31 @@ func (s *AutoDrawScheduler) executePlan(parent context.Context, key string) erro
 		return nil
 	}
 
+	// Plans left over from a removed or replaced schedule must never fire.
+	hasSchedule := false
+	for _, entry := range s.store.DrawSchedules(plan.AccountID) {
+		if entry.ID == plan.WindowID {
+			hasSchedule = true
+			break
+		}
+	}
+	if !hasSchedule {
+		finished, finishErr := s.store.FinishAutoDrawPlan(key, state.AutoDrawPlanSkipped, "定时抽奖计划已变更，跳过本次执行", "", nil, s.currentTime().UTC())
+		if finishErr != nil {
+			return fmt.Errorf("finish auto draw plan: %w", finishErr)
+		}
+		if _, err := s.store.AppendRuntimeLog(state.RuntimeLog{
+			OccurredAt: finished.ExecutedAt,
+			AccountID:  finished.AccountID,
+			WindowID:   finished.WindowID,
+			Status:     finished.Status,
+			Message:    finished.Message,
+		}); err != nil {
+			return fmt.Errorf("append auto draw runtime log: %w", err)
+		}
+		return nil
+	}
+
 	operationTimeout := s.operationTimeout
 	if operationTimeout <= 0 {
 		operationTimeout = autoDrawOperationWindow

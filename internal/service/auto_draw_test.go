@@ -457,3 +457,38 @@ func TestSchedulerSkipsReauthRequiredWithoutLogin(t *testing.T) {
 		t.Fatalf("scheduler logged in %d times", client.loginCalls)
 	}
 }
+
+// Plans left over from a removed schedule (e.g. after the fixed three-window
+// model was retired) must be skipped instead of firing a draw.
+func TestAutoDrawSchedulerSkipsOrphanedPlans(t *testing.T) {
+	store := openAutoDrawTestStore(t)
+	now := autoDrawTime(2026, time.August, 8, 7, 0, 0)
+	scheduler := newAutoDrawTestScheduler(store, []string{"account-a"}, &now, []int{0}, func(context.Context, string, string) (DrawAvailableOutcome, error) {
+		t.Fatal("orphaned plan must not trigger a draw")
+		return DrawAvailableOutcome{}, nil
+	})
+
+	if err := scheduler.Tick(context.Background()); err != nil {
+		t.Fatalf("initial Tick() error = %v", err)
+	}
+	// Simulate the schedule being removed after its plan was persisted.
+	if _, err := store.SetDrawSchedules("account-a", []state.AutoDrawSchedule{
+		{ID: "evening", Kind: state.AutoDrawScheduleFixed, Start: "18:00"},
+	}); err != nil {
+		t.Fatalf("SetDrawSchedules() error = %v", err)
+	}
+	now = autoDrawTime(2026, time.August, 8, 8, 0, 1)
+	if err := scheduler.Tick(context.Background()); err != nil {
+		t.Fatalf("due Tick() error = %v", err)
+	}
+	orphan := findAutoDrawPlan(t, store, now.Format("2006-01-02"), "account-a", "morning")
+	if orphan.Status != state.AutoDrawPlanSkipped || !strings.Contains(orphan.Message, "计划已变更") {
+		t.Fatalf("orphaned plan = %#v", orphan)
+	}
+	logs := store.RuntimeLogs(10)
+	for _, log := range logs {
+		if log.WindowID == "morning" && log.Status != state.AutoDrawPlanSkipped {
+			t.Fatalf("orphan log = %#v", log)
+		}
+	}
+}
