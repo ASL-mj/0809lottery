@@ -212,7 +212,7 @@ Expected: pass.
 - Modify: `internal/state/store_test.go`
 - Modify: `cmd/lottery-bot/main.go`
 
-- [ ] **Step 1: Write failing registry and migration tests**
+- [x] **Step 1: Write failing registry and migration tests**
 
 Cover create, update, enable/disable, delete, account masking, duplicate remote user ID, account-scoped cleanup and migration rollback:
 
@@ -228,7 +228,7 @@ func TestMigrateV3DoesNotMutateStateWhenVaultWriteFails(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the red tests**
+- [x] **Step 2: Run the red tests**
 
 Run:
 
@@ -238,19 +238,19 @@ go test ./internal/account ./internal/state -run 'Account|Migrate' -count=1
 
 Expected: fail because account metadata and migration APIs do not exist.
 
-- [ ] **Step 3: Implement account records and repository operations**
+- [x] **Step 3: Implement account records and repository operations**
 
 Implement `List`, `Get`, `Create`, `Update`, `SetRemoteUserID`, `Delete`, and `ListEnabled`. Use `crypto/rand` IDs for new accounts; preserve `account-a` through `account-e` only in migration. Persist `masked_login_name`, never raw login name.
 
-- [ ] **Step 4: Move state to version 4 without secrets**
+- [x] **Step 4: Move state to version 4 without secrets**
 
 Replace persisted `Accounts map[string]AuthState` with account records and public auth health. Preserve actions, snapshots, plans and logs. Add an account-scoped removal method that removes only the selected account's actions, snapshots, plans and logs after disabling it.
 
-- [ ] **Step 5: Implement `lottery-bot migrate`**
+- [x] **Step 5: Implement `lottery-bot migrate`**
 
 Acquire the existing state-file lock, decode v3 in memory, import legacy login/password from environment plus existing tokens/Cookie/user ID into Vault, reread every entry, then atomically write v4 state. Refuse to proceed if any legacy secret is missing; do not force a new login. A v4 state returns an idempotent “no migration needed” result.
 
-- [ ] **Step 6: Verify registry and migration**
+- [x] **Step 6: Verify registry and migration**
 
 Run:
 

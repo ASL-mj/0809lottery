@@ -2,13 +2,15 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"sort"
 	"syscall"
 
 	"skyeapi/lottery-bot/internal/config"
+	"skyeapi/lottery-bot/internal/secret"
+	"skyeapi/lottery-bot/internal/state"
 	"skyeapi/lottery-bot/internal/web"
 )
 
@@ -52,5 +54,24 @@ func runMigrate(cfg config.Config) error {
 	if err := cfg.ValidateMigrate(); err != nil {
 		return err
 	}
-	return fmt.Errorf("migration requires the account registry, which is not installed yet")
+	vault, err := secret.NewFileVault(cfg.VaultPath, cfg.VaultKey)
+	if err != nil {
+		return err
+	}
+	accounts := make([]state.LegacyAccount, 0, len(legacy))
+	for id, account := range legacy {
+		accounts = append(accounts, state.LegacyAccount{
+			ID:        id,
+			Label:     account.Label,
+			LoginName: account.Username,
+			Password:  account.Password,
+		})
+	}
+	sort.Slice(accounts, func(left, right int) bool { return accounts[left].ID < accounts[right].ID })
+	result, err := state.MigrateV3(context.Background(), cfg.StatePath, vault, accounts)
+	if err != nil {
+		return err
+	}
+	log.Printf("migration finished: %s", result.Message)
+	return nil
 }

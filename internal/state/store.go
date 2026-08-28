@@ -13,9 +13,13 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"skyeapi/lottery-bot/internal/account"
 )
 
-const version = 3
+// version is the newest state version written by this build. Version-3 files
+// stay untouched until `lottery-bot migrate` upgrades them to version 4.
+const version = 4
 
 type Cookie struct {
 	Name     string    `json:"name"`
@@ -138,6 +142,22 @@ type RuntimeLog struct {
 }
 
 type diskState struct {
+	Version   int                       `json:"version"`
+	Accounts  map[string]account.Record `json:"accounts,omitempty"`
+	AuthHealth map[string]account.AuthHealth `json:"auth_health,omitempty"`
+	// LegacyAuth bridges version-3 authentication tokens for runners that have
+	// not moved to the secret vault yet. Migrated version-4 files never
+	// contain it.
+	LegacyAuth map[string]AuthState    `json:"legacy_auth,omitempty"`
+	Actions   map[string]Action        `json:"actions"`
+	Snapshots map[string]Snapshot      `json:"snapshots"`
+	Plans     map[string]AutoDrawPlan  `json:"plans,omitempty"`
+	Logs      []RuntimeLog             `json:"logs,omitempty"`
+}
+
+// diskStateV3 mirrors the version-3 file shape, where `accounts` held raw
+// authentication state instead of account records.
+type diskStateV3 struct {
 	Version   int                     `json:"version"`
 	Accounts  map[string]AuthState    `json:"accounts"`
 	Actions   map[string]Action       `json:"actions"`
@@ -181,11 +201,14 @@ func Open(path string) (*Store, error) {
 		path:     path,
 		lockFile: lockFile,
 		data: diskState{
-			Version:   version,
-			Accounts:  make(map[string]AuthState),
-			Actions:   make(map[string]Action),
-			Snapshots: make(map[string]Snapshot),
-			Plans:     make(map[string]AutoDrawPlan),
+			Version:    version,
+			Accounts:   make(map[string]account.Record),
+			AuthHealth: make(map[string]account.AuthHealth),
+			LegacyAuth: make(map[string]AuthState),
+			Actions:    make(map[string]Action),
+			Snapshots:  make(map[string]Snapshot),
+			Plans:      make(map[string]AutoDrawPlan),
+			Logs:       make([]RuntimeLog, 0),
 		},
 		actionLocks: make(map[string]*actionLock),
 		authLocks:   make(map[string]*actionLock),
@@ -210,20 +233,23 @@ func (s *Store) Close() error {
 func (s *Store) Auth(accountID string) AuthState {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return copyAuth(s.data.Accounts[accountID])
+	return copyAuth(s.data.LegacyAuth[accountID])
 }
 
 func (s *Store) PutAuth(accountID string, auth AuthState) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	auth.UpdatedAt = time.Now().UTC()
-	previous, existed := s.data.Accounts[accountID]
-	s.data.Accounts[accountID] = copyAuth(auth)
+	previous, existed := s.data.LegacyAuth[accountID]
+	if s.data.LegacyAuth == nil {
+		s.data.LegacyAuth = make(map[string]AuthState)
+	}
+	s.data.LegacyAuth[accountID] = copyAuth(auth)
 	if err := s.persistLocked(); err != nil {
 		if existed {
-			s.data.Accounts[accountID] = previous
+			s.data.LegacyAuth[accountID] = previous
 		} else {
-			delete(s.data.Accounts, accountID)
+			delete(s.data.LegacyAuth, accountID)
 		}
 		return err
 	}
@@ -719,15 +745,45 @@ func (s *Store) load() error {
 	if err != nil {
 		return fmt.Errorf("read state: %w", err)
 	}
-	if err := json.Unmarshal(payload, &s.data); err != nil {
+	var probe struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(payload, &probe); err != nil {
 		return fmt.Errorf("decode state: %w", err)
 	}
-	if s.data.Version > version {
-		return fmt.Errorf("state version %d is newer than supported version %d", s.data.Version, version)
+	if probe.Version > version {
+		return fmt.Errorf("state version %d is newer than supported version %d", probe.Version, version)
 	}
-	s.data.Version = version
+	if probe.Version >= 4 {
+		if err := json.Unmarshal(payload, &s.data); err != nil {
+			return fmt.Errorf("decode state: %w", err)
+		}
+	} else {
+		// Version 3 (or a headerless legacy file): `accounts` holds raw
+		// authentication state. Keep the file at version 3; only the explicit
+		// migration rewrites it as version 4.
+		var legacy diskStateV3
+		if err := json.Unmarshal(payload, &legacy); err != nil {
+			return fmt.Errorf("decode state: %w", err)
+		}
+		s.data.Version = 3
+		s.data.LegacyAuth = legacy.Accounts
+		s.data.Actions = legacy.Actions
+		s.data.Snapshots = legacy.Snapshots
+		s.data.Plans = legacy.Plans
+		s.data.Logs = legacy.Logs
+	}
+	if s.data.Version == 0 {
+		s.data.Version = 3
+	}
 	if s.data.Accounts == nil {
-		s.data.Accounts = make(map[string]AuthState)
+		s.data.Accounts = make(map[string]account.Record)
+	}
+	if s.data.AuthHealth == nil {
+		s.data.AuthHealth = make(map[string]account.AuthHealth)
+	}
+	if s.data.LegacyAuth == nil {
+		s.data.LegacyAuth = make(map[string]AuthState)
 	}
 	if s.data.Actions == nil {
 		s.data.Actions = make(map[string]Action)
@@ -745,7 +801,21 @@ func (s *Store) load() error {
 }
 
 func (s *Store) persistLocked() error {
-	payload, err := json.MarshalIndent(s.data, "", "  ")
+	var payload []byte
+	var err error
+	if s.data.Version <= 3 {
+		legacy := diskStateV3{
+			Version:   3,
+			Accounts:  s.data.LegacyAuth,
+			Actions:   s.data.Actions,
+			Snapshots: s.data.Snapshots,
+			Plans:     s.data.Plans,
+			Logs:      s.data.Logs,
+		}
+		payload, err = json.MarshalIndent(legacy, "", "  ")
+	} else {
+		payload, err = json.MarshalIndent(s.data, "", "  ")
+	}
 	if err != nil {
 		return fmt.Errorf("encode state: %w", err)
 	}
