@@ -1,0 +1,826 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>0809 账号工作台</title>
+  <style>
+    :root { --ink:#171717; --muted:#6f6f6b; --line:#ddddda; --line-strong:#c8c8c3; --paper:#fff; --surface:#f4f4f1; --soft:#fafaf8; --ok:#27613e; --ok-bg:#f1f8f3; --ok-line:#9cc4aa; --error:#9d3535; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-width:320px; background:var(--surface); color:var(--ink); font:14px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Microsoft YaHei",sans-serif; -webkit-font-smoothing:antialiased; }
+    button { font:inherit; }
+    button:disabled { cursor:wait; opacity:.55; }
+    button:focus-visible { outline:2px solid var(--ink); outline-offset:2px; }
+    main { width:min(1260px,calc(100% - 48px)); margin:0 auto; padding:42px 0 72px; }
+    .layout { display:grid; grid-template-columns:minmax(0,1fr) 372px; gap:26px; align-items:start; margin-top:8px; }
+    .layout__main { min-width:0; }
+    .layout__side { min-width:0; position:sticky; top:24px; padding-top:18px; }
+    header { display:flex; align-items:flex-end; justify-content:space-between; gap:28px; padding:0 2px 22px; border-bottom:1px solid var(--line-strong); }
+    h1 { margin:0; font-size:24px; line-height:1.2; font-weight:720; letter-spacing:-.02em; }
+    header p { margin:5px 0 0; color:var(--muted); font-size:13px; }
+    .page-note { color:var(--muted); font-size:12px; white-space:nowrap; }
+    #accounts { padding-top:20px; }
+    #accounts > .account { max-width:780px; }
+    .account-tabs { display:flex; flex-wrap:wrap; gap:8px; padding:18px 2px 0; }
+    .account-tab { appearance:none; min-width:0; display:inline-flex; align-items:center; gap:7px; max-width:280px; padding:8px 14px; border:1px solid var(--line-strong); border-radius:999px; background:var(--paper); color:var(--muted); font-size:13px; line-height:1.2; cursor:pointer; transition:background-color 160ms ease,color 160ms ease,border-color 160ms ease; }
+    .account-tab:hover { border-color:var(--ink); color:var(--ink); }
+    .account-tab[aria-selected="true"] { background:var(--ink); border-color:var(--ink); color:var(--paper); }
+    .account-tab__code { flex:none; display:inline-flex; align-items:center; justify-content:center; min-width:18px; height:18px; padding:0 5px; border-radius:999px; background:var(--soft); color:var(--muted); font-size:11px; font-weight:640; }
+    .account-tab[aria-selected="true"] .account-tab__code { background:rgba(255,255,255,.16); color:var(--paper); }
+    .account-tab__label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .account { min-width:0; overflow:hidden; display:flex; flex-direction:column; border:1px solid var(--line-strong); border-radius:7px; background:var(--paper); box-shadow:0 1px 0 rgba(0,0,0,.02); }
+    .account__identity { min-width:0; padding:17px 18px 15px; }
+    .account__eyebrow { display:flex; align-items:center; gap:7px; margin-bottom:5px; color:var(--muted); font-size:11px; letter-spacing:.04em; text-transform:uppercase; }
+    .account__dot { width:7px; height:7px; flex:none; border-radius:50%; background:#5b8b69; box-shadow:0 0 0 3px #edf5ef; }
+    .account__name { margin:0; max-width:100%; font-size:17px; line-height:1.35; font-weight:690; overflow-wrap:anywhere; word-break:break-word; }
+    .account__user { margin-top:3px; color:var(--muted); font-size:12px; overflow-wrap:anywhere; word-break:break-word; }
+    .account__checkin-reward { display:inline-flex; align-items:baseline; gap:6px; max-width:100%; margin-top:10px; padding:4px 8px; border:1px solid var(--line); border-radius:999px; background:var(--soft); color:var(--muted); font-size:11px; line-height:1.35; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+    .account__checkin-reward strong { color:var(--ink); font-size:12px; font-weight:680; white-space:nowrap; }
+    .account__checkin-reward--ok { border-color:var(--ok-line); background:var(--ok-bg); color:var(--ok); }
+    .account__checkin-reward--ok strong { color:var(--ok); }
+    .account__checkin-reward--error { border-color:#d7b0b0; background:#fdf3f3; color:var(--error); }
+    .account__actions { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:8px; padding:12px 14px; border-top:1px solid var(--line); border-bottom:1px solid var(--line); background:var(--soft); }
+    .action { min-width:0; height:36px; display:inline-flex; align-items:center; justify-content:center; gap:6px; padding:0 9px; border:1px solid #bdbdb8; border-radius:5px; background:var(--paper); color:var(--ink); font-size:12px; line-height:1; white-space:nowrap; cursor:pointer; transition:background-color 160ms ease,color 160ms ease,border-color 160ms ease; }
+    .action svg { width:14px; height:14px; flex:none; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+    .action:hover:not(:disabled) { border-color:var(--ink); background:#f0f0ed; }
+    .action--primary { border-color:var(--ink); background:var(--ink); color:var(--paper); }
+    .action--primary:hover:not(:disabled) { background:#303030; color:var(--paper); }
+    .action--done,
+    .action--done:disabled { border-color:var(--ok-line); color:var(--ok); background:var(--ok-bg); cursor:default; opacity:1; }
+    .auto-draw { padding:13px 18px 15px; border-bottom:1px solid var(--line); background:#fcfcfa; }
+    .auto-draw__head { display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-bottom:11px; }
+    .auto-draw__title { margin:0; color:var(--muted); font-size:12px; font-weight:540; }
+    .auto-draw__summary { color:#8b8b86; font-size:11px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+    .auto-draw__timeline { position:relative; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin:0; padding:0; list-style:none; }
+    .auto-draw__timeline::before { content:""; position:absolute; top:6px; right:calc(16.666% + 4px); left:calc(16.666% + 4px); height:1px; background:var(--line-strong); }
+    .auto-draw__step { position:relative; z-index:1; min-width:0; }
+    .auto-draw__dot { width:13px; height:13px; margin-bottom:6px; border:3px solid var(--paper); border-radius:50%; background:#b9b9b4; box-shadow:0 0 0 1px var(--line-strong); }
+    .auto-draw__step--running .auto-draw__dot { background:var(--ink); box-shadow:0 0 0 1px var(--ink),0 0 0 4px #ececea; }
+    .auto-draw__step--completed .auto-draw__dot { background:#4e8a61; box-shadow:0 0 0 1px #4e8a61; }
+    .auto-draw__step--skipped .auto-draw__dot { background:#8b8b86; box-shadow:0 0 0 1px #8b8b86; }
+    .auto-draw__step--failed .auto-draw__dot { background:var(--error); box-shadow:0 0 0 1px var(--error); }
+    .auto-draw__time { color:var(--ink); font-size:11px; font-weight:640; font-variant-numeric:tabular-nums; }
+    .auto-draw__status { min-width:0; margin-top:2px; color:var(--muted); font-size:11px; line-height:1.35; overflow-wrap:anywhere; }
+    .auto-draw__step--completed .auto-draw__status { color:var(--ok); }
+    .auto-draw__step--failed .auto-draw__status { color:var(--error); }
+    .auto-draw__error { margin-top:7px; color:var(--error); font-size:11px; }
+    .account__body { flex:1; padding:17px 18px 16px; }
+    .draw-section { padding-bottom:18px; }
+    .section-head { min-width:0; display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:6px 14px; margin-bottom:10px; }
+    .section-title { margin:0; color:var(--muted); font-size:12px; font-weight:540; }
+    .section-meta { min-width:0; color:#8b8b86; font-size:11px; text-align:right; overflow-wrap:anywhere; }
+    .metrics { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); border-top:1px solid var(--line); border-bottom:1px solid var(--line); background:#fbfbfa; }
+    .metric { min-width:0; padding:12px 13px 11px; border-right:1px solid var(--line); }
+    .metric:last-child { border-right:0; }
+    .metric__label { color:var(--muted); font-size:11px; }
+    .metric__value { margin-top:2px; font-size:18px; line-height:1.2; font-weight:690; font-variant-numeric:tabular-nums; }
+    .metric__unit { margin-left:2px; color:var(--muted); font-size:11px; font-weight:450; }
+    .draw-empty { min-height:74px; display:flex; align-items:center; padding:0 13px; border-top:1px solid var(--line); border-bottom:1px solid var(--line); background:#fbfbfa; color:var(--muted); }
+    .activity-section { padding-bottom:18px; }
+    .activity-toolbar { display:inline-flex; align-items:center; gap:6px; }
+    .activity-note { margin-top:10px; color:var(--muted); font-size:12px; }
+    .activity-note--error { color:var(--error); }
+    .purchase-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-top:12px; }
+    .action--purchase { min-height:42px; height:auto; padding:10px 12px; white-space:normal; text-align:center; line-height:1.35; }
+    .action--compact { height:30px; padding:0 10px; font-size:11px; }
+    .subscriptions { padding-top:1px; }
+    .subscription { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:18px; padding:13px 0; border-bottom:1px solid #ebebe8; }
+    .subscription:last-child { border-bottom:0; }
+    .subscription__plan { font-size:13px; font-weight:620; }
+    .subscription__meta { margin-top:2px; color:var(--muted); font-size:11px; }
+    .subscription__quota { text-align:right; font-size:15px; font-weight:650; font-variant-numeric:tabular-nums; white-space:nowrap; }
+    .empty { color:var(--muted); }
+    .account__footer { min-height:42px; display:flex; align-items:center; gap:8px; padding:10px 18px; border-top:1px solid var(--line); background:#fcfdfc; }
+    .account__footer svg { width:14px; height:14px; flex:none; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+    .account__footer:focus-visible { outline:2px solid var(--ink); outline-offset:-3px; }
+    .account__status { color:var(--muted); font-size:12px; }
+    .account__status--ok { color:var(--ok); }
+    .account__status--error { color:var(--error); }
+    .page-message { grid-column:1 / -1; padding:24px 0; color:var(--muted); }
+    .runtime-panel { border:1px solid var(--line-strong); border-radius:7px; background:var(--paper); box-shadow:0 1px 0 rgba(0,0,0,.02); overflow:hidden; }
+    .runtime-panel__header { min-width:0; display:flex; align-items:flex-start; justify-content:space-between; gap:14px; padding:18px; border-bottom:1px solid var(--line); background:var(--soft); }
+    .runtime-panel__title { margin:0; font-size:16px; line-height:1.3; font-weight:690; }
+    .runtime-panel__description { margin:4px 0 0; color:var(--muted); font-size:12px; }
+    .runtime-list { min-width:0; }
+    .runtime-state { padding:18px; color:var(--muted); }
+    .runtime-state--error { color:var(--error); }
+    .runtime-log { padding:14px 18px 15px; border-bottom:1px solid #ebebe8; }
+    .runtime-log:last-child { border-bottom:0; }
+    .runtime-log__top { min-width:0; display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px 12px; }
+    .runtime-log__time { font-size:13px; font-weight:620; font-variant-numeric:tabular-nums; }
+    .runtime-log__status { display:inline-flex; align-items:center; min-height:24px; padding:0 8px; border:1px solid var(--line); border-radius:999px; background:#f7f7f5; color:var(--muted); font-size:11px; letter-spacing:.02em; }
+    .runtime-log__status--ok { border-color:var(--ok-line); background:var(--ok-bg); color:var(--ok); }
+    .runtime-log__status--error { border-color:#d7b0b0; background:#fdf3f3; color:var(--error); }
+    .runtime-log__meta { display:flex; flex-wrap:wrap; gap:6px 16px; margin-top:7px; color:var(--muted); font-size:12px; }
+    .runtime-log__message { margin-top:8px; color:var(--ink); overflow-wrap:anywhere; word-break:break-word; }
+    @media (max-width:1040px) {
+      main { width:min(760px,calc(100% - 36px)); }
+      .layout { grid-template-columns:1fr; gap:22px; }
+      .layout__side { position:static; padding-top:0; }
+    }
+    @media (max-width:620px) {
+      main { width:min(100% - 24px,520px); padding-top:26px; }
+      header { align-items:flex-start; flex-direction:column; gap:8px; }
+      .page-note { white-space:normal; }
+      .account__actions { grid-template-columns:repeat(2,minmax(0,1fr)); }
+      .action--primary { grid-column:span 2; }
+      .metrics { grid-template-columns:repeat(3,minmax(84px,1fr)); }
+      .section-meta { width:100%; text-align:left; }
+      .runtime-panel__header { flex-direction:column; align-items:stretch; }
+    }
+    @media (max-width:390px) {
+      .purchase-actions { grid-template-columns:1fr; }
+    }
+    @media (prefers-reduced-motion:reduce) { *,*::before,*::after { scroll-behavior:auto!important; transition:none!important; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header><div><h1>0809 账号工作台</h1><p>每个账号独立管理与查询。认证材料仅在服务端状态文件中使用。</p></div><div class="page-note">额度统一以美元显示</div></header>
+    <div class="layout">
+      <div class="layout__main">
+        <nav class="account-tabs" id="account-tabs" aria-label="账号切换"></nav>
+        <section id="accounts" aria-label="账号详情"><p class="page-message">正在读取账号...</p></section>
+      </div>
+      <aside class="layout__side">
+        <section class="runtime-panel" aria-labelledby="runtime-logs-title">
+          <div class="runtime-panel__header">
+            <div><h2 id="runtime-logs-title" class="runtime-panel__title">系统运行日志</h2><p class="runtime-panel__description">自动抽奖执行结果，最新优先展示。</p></div>
+            <button id="runtime-logs-refresh" class="action action--compact" type="button">刷新日志</button>
+          </div>
+          <div id="runtime-logs" class="runtime-list" aria-live="polite" aria-busy="true"><div class="runtime-state">正在读取运行日志...</div></div>
+        </section>
+      </aside>
+    </div>
+  </main>
+  <script>
+    const state = { accounts: [], activeAccountId: null, runtimeLogs: [], logsLoading: false, logsError: '', autoDrawLoading: false };
+    const root = document.querySelector('#accounts');
+    const tabsRoot = document.querySelector('#account-tabs');
+    const logsRoot = document.querySelector('#runtime-logs');
+    const logsRefreshButton = document.querySelector('#runtime-logs-refresh');
+    const icons = {
+      checkin: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 2v4M16 2v4M3 10h18"/><rect x="3" y="4" width="18" height="17" rx="2"/><path d="m9 16 2 2 4-4"/></svg>',
+      claim: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12v8H4v-8M2 7h20v5H2zM12 22V7M12 7H7.5A2.5 2.5 0 1 1 10 4.5C10 7 12 7 12 7ZM12 7h4.5A2.5 2.5 0 1 0 14 4.5C14 7 12 7 12 7Z"/></svg>',
+      draw: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3-1.7 3.5L6.5 8.2l3.8 1.7L12 13.5l1.7-3.6 3.8-1.7-3.8-1.7L12 3ZM5 15l-.9 1.9L2 18l2.1 1.1L5 21l.9-1.9L8 18l-2.1-1.1L5 15ZM18.5 14l-1.2 2.5L15 17.7l2.3 1.1 1.2 2.5 1.2-2.5 2.3-1.1-2.3-1.2-1.2-2.5Z"/></svg>',
+      refresh: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5M4 13a8.1 8.1 0 0 0 15.5 2M20 20v-5h-5"/></svg>',
+      subscriptions: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3v18h18M7 16l4-4 3 3 5-6"/></svg>',
+      success: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21.8 10A10 10 0 1 1 17 3.3"/><path d="m9 11 3 3L22 4"/></svg>',
+      error: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6M9 9l6 6"/></svg>',
+      info: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>',
+    };
+    logsRefreshButton.innerHTML = `${icons.refresh}<span>刷新日志</span>`;
+    const runtimeWindowLabels = {
+      morning: '早间 08:00–09:00',
+      noon: '午间 13:00–14:00',
+      afternoon: '午间 13:00–14:00',
+      midday: '午间 13:00–14:00',
+      evening: '晚间 18:00–19:00',
+    };
+    const autoDrawWindows = [
+      { id: 'morning', time: '08:00–09:00' },
+      { id: 'afternoon', time: '13:00–14:00' },
+      { id: 'evening', time: '18:00–19:00' },
+    ];
+    const escapeHTML = (value) => String(value ?? '').replace(/[&<>'"]/g, (char) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' }[char]));
+    const formatTime = (value) => {
+      if (!value) return '';
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? String(value) : new Intl.DateTimeFormat('zh-CN', { dateStyle:'medium', timeStyle:'short', hour12:false, timeZone:'Asia/Shanghai' }).format(date);
+    };
+    const formatClock = (value) => {
+      if (!value) return '';
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat('zh-CN', { hour:'2-digit', minute:'2-digit', hour12:false, timeZone:'Asia/Shanghai' }).format(date);
+    };
+    const formatQuota = (value) => value == null ? '未知' : `$ ${Number(value).toFixed(2)}`;
+    const formatAward = (value) => `$${Number(value).toFixed(2)}`;
+    const toNumber = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
+    function formatRuntimeStatus(status) {
+      if (status === 'success' || status === 'completed') return { label: '成功', tone: 'ok' };
+      if (status === 'skipped' || status === 'skip') return { label: '跳过', tone: 'muted' };
+      if (status === 'failed' || status === 'failure' || status === 'error') return { label: '失败', tone: 'error' };
+      return { label: status ? escapeHTML(status) : '未知', tone: 'muted' };
+    }
+    function formatRuntimeWindow(windowID) {
+      return runtimeWindowLabels[windowID] || escapeHTML(windowID || '未知窗口');
+    }
+    function compareRuntimeLogs(left, right) {
+      const leftTime = Date.parse(left?.occurred_at || '') || 0;
+      const rightTime = Date.parse(right?.occurred_at || '') || 0;
+      if (leftTime !== rightTime) return rightTime - leftTime;
+      return String(right?.id || '').localeCompare(String(left?.id || ''));
+    }
+    function renderRuntimeLog(log) {
+      const status = formatRuntimeStatus(log.status);
+      const accountLabel = escapeHTML(log.account_label || log.account_id || '未知账号');
+      const windowLabel = formatRuntimeWindow(log.window_id);
+      const details = [];
+      if (log.prize_label) details.push(`奖品：${escapeHTML(log.prize_label)}`);
+      if (log.quota_delta_usd != null && !Number.isNaN(Number(log.quota_delta_usd))) details.push(`额度：$${Number(log.quota_delta_usd).toFixed(2)}`);
+      const detailText = details.length ? ` · ${details.join(' · ')}` : '';
+      const statusClass = status.tone === 'ok' ? ' runtime-log__status--ok' : status.tone === 'error' ? ' runtime-log__status--error' : '';
+      return `<article class="runtime-log"><div class="runtime-log__top"><div class="runtime-log__time">${escapeHTML(formatTime(log.occurred_at) || '时间未知')}</div><span class="runtime-log__status${statusClass}">${status.label}</span></div><div class="runtime-log__meta"><span>账号：${accountLabel}</span><span>窗口：${windowLabel}</span></div><div class="runtime-log__message">${escapeHTML(log.message || '无附加说明')}${detailText}</div></article>`;
+    }
+    function renderRuntimeLogs() {
+      logsRefreshButton.disabled = state.logsLoading;
+      logsRefreshButton.innerHTML = `${icons.refresh}<span>${state.logsLoading ? '刷新中' : '刷新日志'}</span>`;
+      logsRoot.setAttribute('aria-busy', state.logsLoading ? 'true' : 'false');
+      if (state.logsLoading && !state.runtimeLogs.length) {
+        logsRoot.innerHTML = '<div class="runtime-state">正在读取运行日志...</div>';
+        return;
+      }
+      if (state.logsError && !state.runtimeLogs.length) {
+        logsRoot.innerHTML = `<div class="runtime-state runtime-state--error">运行日志拉取失败：${escapeHTML(state.logsError)}</div>`;
+        return;
+      }
+      if (!state.runtimeLogs.length) {
+        logsRoot.innerHTML = '<div class="runtime-state">暂无运行日志。</div>';
+        return;
+      }
+      const items = state.runtimeLogs.slice().sort(compareRuntimeLogs).map(renderRuntimeLog).join('');
+      const note = state.logsError ? `<div class="runtime-state runtime-state--error">最近一次刷新失败：${escapeHTML(state.logsError)}</div>` : '';
+      logsRoot.innerHTML = `${note}${items}`;
+    }
+    async function request(url, options) {
+      const response = await fetch(url, options);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || '请求失败');
+      return data;
+    }
+    function snapshotData(account) {
+      const snapshot = account.subscription_snapshot;
+      if (!snapshot || !snapshot.data || typeof snapshot.data !== 'object') return null;
+      return { ...snapshot.data, queried_at: snapshot.queried_at || snapshot.data.queried_at };
+    }
+    function drawSnapshotData(account) {
+      const snapshot = account.draw_count_snapshot;
+      if (!snapshot || !snapshot.data || typeof snapshot.data !== 'object') return null;
+      return { ...snapshot.data, queried_at: snapshot.queried_at || snapshot.data.queried_at };
+    }
+    function activitySnapshotData(account) {
+      const snapshot = account.activity_snapshot;
+      if (!snapshot || !snapshot.data || typeof snapshot.data !== 'object') return null;
+      return { ...snapshot.data, queried_at: snapshot.queried_at || snapshot.data.queried_at };
+    }
+    function activityData(account) {
+      return account.activity_result || activitySnapshotData(account);
+    }
+    function hydrateAccount(account) {
+      return {
+        ...account,
+        checking_in: false,
+        claiming: false,
+        drawing: false,
+        refreshing: false,
+        querying_draw: false,
+        querying_activity: false,
+        purchasing_draw: false,
+        unlocking_pass: false,
+        activity_result: null,
+        activity_error: '',
+        auto_draw: null,
+        auto_draw_error: '',
+        footer_message: '',
+        footer_tone: '',
+      };
+    }
+    function findAccount(id) {
+      return state.accounts.find((item) => item.id === id) || null;
+    }
+    function autoDrawSteps(account) {
+      const windows = Array.isArray(account.auto_draw?.windows) ? account.auto_draw.windows : [];
+      return autoDrawWindows.map((window) => ({ ...window, ...(windows.find((item) => item?.window_id === window.id) || {}) }));
+    }
+    function autoDrawStepDisplay(step) {
+      const status = String(step.status || 'pending').toLowerCase();
+      const finishedAt = formatClock(step.executed_at);
+      if (status === 'completed') return { tone: 'completed', label: `已完成${finishedAt ? ` · ${finishedAt}` : ''}` };
+      if (status === 'skipped') return { tone: 'skipped', label: `已跳过${finishedAt ? ` · ${finishedAt}` : ''}` };
+      if (status === 'failed') return { tone: 'failed', label: `失败${finishedAt ? ` · ${finishedAt}` : ''}` };
+      if (status === 'running') return { tone: 'running', label: '执行中' };
+      const plannedAt = formatClock(step.planned_at);
+      return { tone: 'pending', label: plannedAt ? `计划 ${plannedAt}` : '计划待生成' };
+    }
+    function renderAutoDrawSchedule(account) {
+      const steps = autoDrawSteps(account);
+      const handled = steps.filter((step) => ['completed', 'skipped', 'failed'].includes(String(step.status || '').toLowerCase())).length;
+      const items = steps.map((step) => {
+        const display = autoDrawStepDisplay(step);
+        return `<li class="auto-draw__step auto-draw__step--${display.tone}"><div class="auto-draw__dot" aria-hidden="true"></div><div class="auto-draw__time">${step.time}</div><div class="auto-draw__status">${escapeHTML(display.label)}</div></li>`;
+      }).join('');
+      const error = account.auto_draw_error ? `<div class="auto-draw__error">计划更新失败：${escapeHTML(account.auto_draw_error)}</div>` : '';
+      return `<section class="auto-draw" aria-label="今日定时抽奖进度"><div class="auto-draw__head"><h3 class="auto-draw__title">今日定时抽奖</h3><span class="auto-draw__summary">已执行 ${handled}/3</span></div><ol class="auto-draw__timeline">${items}</ol>${error}</section>`;
+    }
+    function renderDrawCount(account) {
+      const result = account.draw_result || drawSnapshotData(account);
+      if (account.draw_error) return `<section class="draw-section"><div class="section-head"><h3 class="section-title">抽奖次数</h3></div><div class="draw-empty account__status--error">查询失败：${escapeHTML(account.draw_error)}</div></section>`;
+      if (!result) return '<section class="draw-section"><div class="section-head"><h3 class="section-title">抽奖次数</h3></div><div class="draw-empty">尚未查询。</div></section>';
+      const remaining = toNumber(result.remaining);
+      const locked = toNumber(result.locked_remaining);
+      const used = toNumber(result.daily_used);
+      const limit = toNumber(result.free_limit);
+      const meta = [result.unlocked ? '今日已解锁' : '', result.queried_at ? `更新于 ${formatTime(result.queried_at)}` : ''].filter(Boolean).join(' · ');
+      return `<section class="draw-section"><div class="section-head"><h3 class="section-title">抽奖次数</h3>${meta ? `<span class="section-meta">${escapeHTML(meta)}</span>` : ''}</div><div class="metrics"><div class="metric"><div class="metric__label">当前可抽</div><div class="metric__value">${remaining}<span class="metric__unit">次</span></div></div><div class="metric"><div class="metric__label">已锁定</div><div class="metric__value">${locked}<span class="metric__unit">次</span></div></div><div class="metric"><div class="metric__label">今日已用</div><div class="metric__value">${used}/${limit}<span class="metric__unit">次</span></div></div></div></section>`;
+    }
+    function formatUSD(value) {
+      return value == null || Number.isNaN(Number(value)) ? '$--' : `$${Number(value).toFixed(2)}`;
+    }
+    function purchaseBusy(account, activity) {
+      return account.querying_activity || account.purchasing_draw || account.unlocking_pass || toNumber(activity?.purchase_pending) > 0 || toNumber(activity?.purchase_unknown) > 0;
+    }
+    function renderActivity(account) {
+      const activity = activityData(account);
+      const error = account.activity_error;
+      const refreshing = account.querying_activity;
+      const toolbar = `<div class="activity-toolbar"><button class="action action--compact" type="button" data-activity="${escapeHTML(account.id)}" ${refreshing ? 'disabled' : ''}>${icons.refresh}${refreshing ? '刷新中' : '刷新活动'}</button></div>`;
+      if (!activity) {
+        const emptyText = error ? `活动刷新失败：${escapeHTML(error)}` : '尚未读取活动。';
+        const emptyClass = error ? ' account__status--error' : '';
+        return `<section class="activity-section"><div class="section-head"><h3 class="section-title">活动状态</h3>${toolbar}</div><div class="draw-empty${emptyClass}">${emptyText}</div></section>`;
+      }
+      const reached = toNumber(activity.spend_tier_reached);
+      const total = toNumber(activity.spend_tier_total);
+      const points = toNumber(activity.lucky_points);
+      const maxPoints = toNumber(activity.lucky_max_points);
+      const bonusDraws = toNumber(activity.spend_bonus_draws);
+      const nextRemaining = activity.next_spend_remaining_usd != null ? formatUSD(activity.next_spend_remaining_usd) : '';
+      const helper = activity.next_spend_remaining_usd != null
+        ? `距下一档还需 ${nextRemaining} · 今日累计加抽 ${bonusDraws} 次`
+        : `全部档位已完成 · 今日累计加抽 ${bonusDraws} 次`;
+      const meta = [activity.queried_at ? `更新于 ${formatTime(activity.queried_at)}` : '', toNumber(activity.purchase_pending) > 0 ? 'purchase_pending' : '', toNumber(activity.purchase_unknown) > 0 ? 'purchase_unknown' : ''].filter(Boolean).join(' · ');
+      const drawPrice = activity.draw_purchase_cost_usd;
+      const passPrice = activity.pass_unlock_cost_usd;
+      const blocked = purchaseBusy(account, activity);
+      const drawDisabled = blocked || drawPrice == null;
+      const passUnlocked = !!activity.pass_unlocked;
+      const passDisabled = blocked || passUnlocked || passPrice == null;
+      const note = error ? `<div class="activity-note activity-note--error">最近刷新失败：${escapeHTML(error)}</div>` : '';
+      const pendingNote = toNumber(activity.purchase_pending) > 0 || toNumber(activity.purchase_unknown) > 0
+        ? `<div class="activity-note">购买结果待确认，暂不允许重复提交。</div>`
+        : '';
+      return `<section class="activity-section"><div class="section-head"><h3 class="section-title">活动状态</h3>${toolbar}</div>${meta ? `<div class="section-meta">${escapeHTML(meta)}</div>` : ''}<div class="metrics"><div class="metric"><div class="metric__label">今日消耗</div><div class="metric__value">${formatUSD(activity.today_spend_usd)}</div></div><div class="metric"><div class="metric__label">消耗激励</div><div class="metric__value">${reached}/${total}<span class="metric__unit">档</span></div></div><div class="metric"><div class="metric__label">幸运积分</div><div class="metric__value">${points}/${maxPoints}</div></div></div><div class="activity-note">${escapeHTML(helper)}</div>${note}${pendingNote}<div class="purchase-actions"><button class="action action--purchase" type="button" data-purchase-draw="${escapeHTML(account.id)}" ${drawDisabled ? 'disabled' : ''}>${icons.draw}购买 1 抽 · ${formatUSD(drawPrice)}</button><button class="action action--purchase${passUnlocked ? ' action--done' : ''}" type="button" data-unlock-pass="${escapeHTML(account.id)}" ${passDisabled ? 'disabled' : ''}>${icons.claim}${passUnlocked ? '今日通行证已购买' : `购买通行证 · ${formatUSD(passPrice)}`}</button></div></section>`;
+    }
+    function renderSubscription(subscription) {
+      const quota = subscription.unlimited ? '不限额' : formatQuota(subscription.remaining_usd);
+      const meta = subscription.end_time ? `到期：${formatTime(subscription.end_time)}` : '未提供到期时间';
+      return `<div class="subscription"><div><div class="subscription__plan">${escapeHTML(subscription.plan_title || '未命名订阅')}</div><div class="subscription__meta">${escapeHTML(meta)}</div></div><div class="subscription__quota">${escapeHTML(quota)}<div class="subscription__meta">${subscription.unlimited ? '状态' : '剩余'}</div></div></div>`;
+    }
+    function renderCheckinReward(account) {
+      const reward = account.checkin_quota_awarded;
+      if (account.checkin_status === 'completed') {
+        if (reward != null && !Number.isNaN(Number(reward))) {
+          return `<div class="account__checkin-reward account__checkin-reward--ok"><span>今日签到奖励</span><strong>${formatAward(reward)}</strong></div>`;
+        }
+        return '<div class="account__checkin-reward account__checkin-reward--ok">今日已签到 · 奖励待核对</div>';
+      }
+      if (account.checking_in) return '<div class="account__checkin-reward">今日签到：核对中</div>';
+      if (account.checkin_status === 'failed') return '<div class="account__checkin-reward account__checkin-reward--error">今日签到：未完成</div>';
+      return '<div class="account__checkin-reward">今日签到：未签到</div>';
+    }
+    function defaultFooter(account, result, error) {
+      const checkinError = account.checkin_error;
+      const checkinFailed = account.checkin_status === 'failed';
+      const checkedIn = account.checkin_status === 'completed';
+      const claimCompleted = account.claim_status === 'completed';
+      const claimFailed = account.claim_status === 'failed';
+      const claimUnknown = account.claim_status === 'unknown';
+      if (checkinError) return { message: `签到失败：${checkinError}`, tone: 'error' };
+      if (checkinFailed) return { message: `签到失败：${account.checkin_message || '请重试'}`, tone: 'error' };
+      if (claimFailed) return { message: account.claim_message || '领取失败，请重试', tone: 'error' };
+      if (claimUnknown) return { message: account.claim_message || '领取结果待确认', tone: 'error' };
+      if (claimCompleted) {
+        const hasRemaining = account.claim_remaining != null;
+        const added = Math.max(0, toNumber(account.claim_added, 0));
+        const message = hasRemaining
+          ? (added > 0 ? `领取成功：新增 ${added} 次，当前 ${account.claim_remaining} 次` : `领取成功：${account.claim_message || '今日已领取'}，当前 ${account.claim_remaining} 次`)
+          : `领取成功：${account.claim_message || '今日已领取'}`;
+        return { message, tone: 'ok' };
+      }
+      if (checkedIn) {
+        const reward = account.checkin_quota_awarded;
+        return { message: `签到成功：${reward != null ? `获得 ${formatAward(reward)} 额度` : (account.checkin_message || '今日已完成')}`, tone: 'ok' };
+      }
+      if (error) return { message: error, tone: 'error' };
+      if (result?.queried_at) return { message: `已于 ${formatTime(result.queried_at)} 更新`, tone: 'ok' };
+      return { message: '等待查询', tone: '' };
+    }
+    function footerState(account, result, error) {
+      if (account.footer_message) {
+        return { message: account.footer_message, tone: account.footer_tone };
+      }
+      return defaultFooter(account, result, error);
+    }
+    function renderAccount(account) {
+      const result = account.result || snapshotData(account);
+      const subscriptions = Array.isArray(result?.subscriptions) ? result.subscriptions : [];
+      const error = result?.query_error;
+      const checkedIn = account.checkin_status === 'completed';
+      const claimDone = account.claim_status === 'completed';
+      let body = renderDrawCount(account) + renderActivity(account) + '<section class="subscriptions"><div class="section-head"><h3 class="section-title">当前有效订阅</h3></div>';
+      if (error) body += '<p class="empty">本次未取得订阅数据。</p>';
+      else if (!result) body += '<p class="empty">尚未查询订阅。</p>';
+      else if (!subscriptions.length) body += '<p class="empty">当前无有效订阅。</p>';
+      else body += subscriptions.map(renderSubscription).join('');
+      body += '</section>';
+      const footer = footerState(account, result, error);
+      const footerClass = footer.tone === 'error' ? ' account__status--error' : footer.tone === 'ok' ? ' account__status--ok' : '';
+      const footerIcon = footer.tone === 'error' ? icons.error : footer.tone === 'ok' ? icons.success : icons.info;
+      const accountCode = String(account.id || '').replace(/^account-/, '').toUpperCase() || account.id;
+      const checkinText = account.checking_in ? '签到中' : checkedIn ? '已签到' : '签到';
+      const claimText = account.claiming ? '领取中' : claimDone ? '今日已领取' : account.claim_status === 'unknown' ? '核对结果' : '领取次数';
+      const drawText = account.drawing ? '抽奖中' : '手动抽奖';
+      const drawCountText = account.querying_draw ? '刷新中' : '刷新次数';
+      const refreshText = account.refreshing ? '刷新中' : '刷新订阅';
+      const autoDrawSchedule = renderAutoDrawSchedule(account);
+      return `<article class="account" data-account-id="${escapeHTML(account.id)}"><div class="account__identity"><div class="account__eyebrow"><span class="account__dot"></span>账号 ${escapeHTML(accountCode)}</div><h2 class="account__name">${escapeHTML(account.label || account.id)}</h2><div class="account__user">${escapeHTML(account.username || '')}</div></div><div class="account__actions"><button class="action${checkedIn ? ' action--done' : ''}" type="button" aria-label="${checkedIn ? '今日已签到' : '执行签到'}" data-checkin="${escapeHTML(account.id)}" ${checkedIn || account.checking_in ? 'disabled' : ''}>${icons.checkin}${checkinText}</button><button class="action${claimDone ? ' action--done' : ''}" type="button" aria-label="领取每日抽奖次数" data-claim="${escapeHTML(account.id)}" ${claimDone || account.claiming ? 'disabled' : ''}>${icons.claim}${claimText}</button><button class="action action--primary" type="button" aria-label="手动抽奖" data-draw="${escapeHTML(account.id)}" ${account.drawing ? 'disabled' : ''}>${icons.draw}${drawText}</button><button class="action" type="button" aria-label="刷新抽奖次数" data-draw-count="${escapeHTML(account.id)}" ${account.querying_draw ? 'disabled' : ''}>${icons.refresh}${drawCountText}</button><button class="action" type="button" aria-label="刷新订阅" data-refresh="${escapeHTML(account.id)}" ${account.refreshing ? 'disabled' : ''}>${icons.subscriptions}${refreshText}</button></div>${autoDrawSchedule}<div class="account__body">${body}</div><div class="account__footer account__status${footerClass}" role="status" aria-live="polite" aria-atomic="true" tabindex="-1" data-status-account="${escapeHTML(account.id)}">${footerIcon}<span>${escapeHTML(footer.message)}</span></div></article>`;
+    }
+    const focusDataKeys = ['refresh', 'checkin', 'claim', 'draw', 'drawCount', 'activity', 'purchaseDraw', 'unlockPass'];
+    function currentFocusTarget() {
+      const active = document.activeElement;
+      if (!active || !root.contains(active)) return null;
+      const button = active.closest('[data-refresh],[data-checkin],[data-claim],[data-draw],[data-draw-count],[data-activity],[data-purchase-draw],[data-unlock-pass]');
+      if (button) {
+        const key = focusDataKeys.find((name) => button.dataset[name]);
+        if (key) return { type: 'button', key, accountID: button.dataset[key] };
+      }
+      const status = active.closest('[data-status-account]');
+      if (status) return { type: 'status', accountID: status.dataset.statusAccount };
+      return null;
+    }
+    function restoreFocus(target) {
+      if (!target) return;
+      const status = Array.from(root.querySelectorAll('[data-status-account]')).find((item) => item.dataset.statusAccount === target.accountID);
+      if (target.type === 'button') {
+        const button = Array.from(root.querySelectorAll(`[data-${target.key.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`)}]`)).find((item) => item.dataset[target.key] === target.accountID);
+        if (button && !button.disabled) {
+          button.focus({ preventScroll: true });
+          return;
+        }
+      }
+      status?.focus({ preventScroll: true });
+    }
+    function renderAccountTab(account) {
+      const selected = account.id === state.activeAccountId;
+      const code = String(account.id || '').replace(/^account-/, '').toUpperCase() || account.id;
+      return `<button class="account-tab" type="button" role="tab" aria-selected="${selected}" data-tab="${escapeHTML(account.id)}" title="${escapeHTML(account.label || account.id)}"><span class="account-tab__code">${escapeHTML(code)}</span><span class="account-tab__label">${escapeHTML(account.label || account.id)}</span></button>`;
+    }
+    function renderTabs() {
+      if (!state.accounts.length) { tabsRoot.innerHTML = ''; return; }
+      tabsRoot.innerHTML = state.accounts.map(renderAccountTab).join('');
+    }
+    function render() {
+      const focusTarget = currentFocusTarget();
+      renderTabs();
+      if (!state.accounts.length) {
+        root.innerHTML = '<p class="page-message">未配置账号。</p>';
+        return;
+      }
+      const active = findAccount(state.activeAccountId) || state.accounts[0];
+      state.activeAccountId = active.id;
+      root.innerHTML = renderAccount(active);
+      const card = root.querySelector('.account');
+      if (card && active) card.querySelector('.account__identity').insertAdjacentHTML('beforeend', renderCheckinReward(active));
+      restoreFocus(focusTarget);
+    }
+    async function loadRuntimeLogs() {
+      if (state.logsLoading) return;
+      state.logsLoading = true;
+      state.logsError = '';
+      renderRuntimeLogs();
+      try {
+        const payload = await request('/api/runtime-logs');
+        state.runtimeLogs = Array.isArray(payload.logs) ? payload.logs : [];
+      } catch (error) {
+        state.logsError = error.message;
+      } finally {
+        state.logsLoading = false;
+        renderRuntimeLogs();
+      }
+    }
+    async function refreshAutoDrawStatus() {
+      if (state.autoDrawLoading) return;
+      state.autoDrawLoading = true;
+      try {
+        const payload = await request('/api/auto-draw-status');
+        const reports = new Map((Array.isArray(payload.accounts) ? payload.accounts : []).map((item) => [item.account_id, item]));
+        state.accounts.forEach((account) => {
+          const report = reports.get(account.id);
+          if (report) {
+            account.auto_draw = report;
+            account.auto_draw_error = '';
+          } else {
+            account.auto_draw_error = '未返回今日计划';
+          }
+        });
+      } catch (error) {
+        state.accounts.forEach((account) => { account.auto_draw_error = error.message; });
+      } finally {
+        state.autoDrawLoading = false;
+        if (state.accounts.length) render();
+      }
+    }
+    function focusStatus(accountID) {
+      requestAnimationFrame(() => {
+        const status = root.querySelector(`[data-status-account="${accountID}"]`);
+        status?.focus({ preventScroll: true });
+      });
+    }
+    function setFooter(account, message, tone) {
+      account.footer_message = message;
+      account.footer_tone = tone;
+    }
+    async function refreshDrawCountOnly(account) {
+      try {
+        account.draw_result = await request('/api/draw-count/query', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ account_id: account.id })
+        });
+        account.draw_error = '';
+      } catch (error) {
+        account.draw_error = error.message;
+      }
+    }
+    async function finishActionAndRefresh(account, busyKey) {
+      account[busyKey] = false;
+      render();
+      await refreshDrawCountOnly(account);
+      render();
+    }
+    async function refreshActivityOnly(account) {
+      try {
+        account.activity_result = await request(`/api/accounts/${encodeURIComponent(account.id)}/activity`, { method: 'POST' });
+        account.activity_error = '';
+        return account.activity_result;
+      } catch (error) {
+        account.activity_error = error.message;
+        throw error;
+      }
+    }
+    async function refreshAccount(id) {
+      const account = findAccount(id);
+      if (!account || account.refreshing) return;
+      account.refreshing = true;
+      account.footer_message = '';
+      render();
+      try {
+        account.result = await request('/api/subscriptions/query', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ account_id: id })
+        });
+      } catch (error) {
+        account.result = { subscriptions: [], query_error: error.message };
+      } finally {
+        account.refreshing = false;
+        render();
+      }
+    }
+    async function checkinAccount(id) {
+      const account = findAccount(id);
+      if (!account || account.checking_in || account.checkin_status === 'completed') return;
+      account.checking_in = true;
+      account.footer_message = '';
+      render();
+      try {
+        const result = await request(`/api/accounts/${encodeURIComponent(id)}/checkin`, { method: 'POST' });
+        account.checkin_status = result.checkin_status;
+        account.checkin_message = result.checkin_message;
+        account.checkin_quota_awarded = result.checkin_quota_awarded;
+        account.checkin_error = '';
+      } catch (error) {
+        account.checkin_error = error.message;
+      } finally {
+        account.checking_in = false;
+        render();
+      }
+    }
+    async function claimAccount(id) {
+      const account = findAccount(id);
+      if (!account || account.claiming || account.claim_status === 'completed') return;
+      account.claiming = true;
+      account.footer_message = '';
+      render();
+      try {
+        const result = await request(`/api/accounts/${encodeURIComponent(id)}/claim`, { method: 'POST' });
+        account.claim_status = result.claim_status;
+        account.claim_message = result.claim_message;
+        account.claim_added = result.added;
+        account.claim_remaining = result.remaining;
+        if (result.claim_status === 'completed') {
+          if (result.remaining != null) {
+            account.footer_message = result.already_completed
+              ? `领取成功：${result.claim_message}，当前 ${result.remaining} 次`
+              : `领取成功：新增 ${Math.max(0, toNumber(result.added, 0))} 次，当前 ${result.remaining} 次`;
+          } else {
+            account.footer_message = `领取成功：${result.claim_message}`;
+          }
+          account.footer_tone = 'ok';
+        } else if (result.claim_status === 'failed') {
+          account.footer_message = result.claim_message || '领取失败，请重试';
+          account.footer_tone = 'error';
+        } else if (result.claim_status === 'unknown') {
+          account.footer_message = result.claim_message || '领取结果待确认';
+          account.footer_tone = 'error';
+        } else {
+          account.footer_message = result.claim_message || '领取处理中';
+          account.footer_tone = '';
+        }
+      } catch (error) {
+        account.footer_message = `领取失败：${error.message}`;
+        account.footer_tone = 'error';
+      } finally {
+        await finishActionAndRefresh(account, 'claiming');
+      }
+    }
+    async function drawAccount(id) {
+      const account = findAccount(id);
+      if (!account || account.drawing) return;
+      account.drawing = true;
+      account.footer_message = '';
+      render();
+      try {
+        const result = await request(`/api/accounts/${encodeURIComponent(id)}/draw`, { method: 'POST' });
+        if (result.skipped) {
+          account.footer_message = `跳过抽奖：${result.message}`;
+        } else {
+          const reward = result.quota_delta_usd != null ? `，奖励 $${Number(result.quota_delta_usd).toFixed(2)}` : '';
+          account.footer_message = `抽奖成功：${result.prize_label || '已完成'}${reward}`;
+        }
+        account.footer_tone = 'ok';
+      } catch (error) {
+        account.footer_message = `抽奖失败：${error.message}`;
+        account.footer_tone = 'error';
+      } finally {
+        await finishActionAndRefresh(account, 'drawing');
+      }
+    }
+    async function queryActivity(id) {
+      const account = findAccount(id);
+      if (!account || account.querying_activity) return;
+      account.querying_activity = true;
+      setFooter(account, '', '');
+      render();
+      try {
+        await refreshActivityOnly(account);
+        setFooter(account, account.activity_result?.queried_at ? `活动已于 ${formatTime(account.activity_result.queried_at)} 更新` : '活动已刷新', 'ok');
+      } catch (error) {
+        setFooter(account, `活动刷新失败：${error.message}`, 'error');
+      } finally {
+        account.querying_activity = false;
+        render();
+        focusStatus(account.id);
+      }
+    }
+    function purchasePrice(account, kind) {
+      const activity = activityData(account);
+      if (!activity) return null;
+      return kind === 'draw' ? activity.draw_purchase_cost_usd : activity.pass_unlock_cost_usd;
+    }
+    function confirmPurchase(account, label, price) {
+      return window.confirm([
+        `账号：${account.label || account.id}`,
+        `商品：${label}`,
+        `价格：${formatUSD(price)}`,
+        '仅北京时间当日有效，将扣除对应额度。',
+      ].join('\n'));
+    }
+    async function purchaseDraw(id) {
+      const account = findAccount(id);
+      if (!account || account.purchasing_draw) return;
+      const activity = activityData(account);
+      if (purchaseBusy(account, activity) || !activity) return;
+      const price = purchasePrice(account, 'draw');
+      if (price == null) {
+        setFooter(account, '购买 1 抽失败：请先刷新活动价格', 'error');
+        render();
+        focusStatus(account.id);
+        return;
+      }
+      if (!confirmPurchase(account, '购买 1 抽', price)) return;
+      account.purchasing_draw = true;
+      setFooter(account, '', '');
+      render();
+      try {
+        const result = await request(`/api/accounts/${encodeURIComponent(id)}/purchase-draw`, { method: 'POST' });
+        if (result.activity) {
+          account.activity_result = result.activity;
+          account.activity_error = '';
+        }
+        const remaining = result.remaining != null ? `，当前 ${result.remaining} 次` : '';
+        const statusPrefix = result.status === 'completed' ? '购买 1 抽成功' : '购买 1 抽处理中';
+        setFooter(account, `${statusPrefix}：${formatUSD(result.price_usd)}${remaining}`, result.status === 'completed' ? 'ok' : 'error');
+      } catch (error) {
+        setFooter(account, `购买 1 抽失败：${error.message}`, 'error');
+      } finally {
+        account.purchasing_draw = false;
+        render();
+        await refreshDrawCountOnly(account);
+        render();
+        focusStatus(account.id);
+      }
+    }
+    async function unlockPass(id) {
+      const account = findAccount(id);
+      if (!account || account.unlocking_pass) return;
+      const activity = activityData(account);
+      if (purchaseBusy(account, activity) || !activity) return;
+      if (activity.pass_unlocked) {
+        setFooter(account, '今日通行证已购买', 'ok');
+        render();
+        focusStatus(account.id);
+        return;
+      }
+      const price = purchasePrice(account, 'pass');
+      if (price == null) {
+        setFooter(account, '购买通行证失败：请先刷新活动价格', 'error');
+        render();
+        focusStatus(account.id);
+        return;
+      }
+      if (!confirmPurchase(account, '购买通行证', price)) return;
+      account.unlocking_pass = true;
+      setFooter(account, '', '');
+      render();
+      try {
+        const result = await request(`/api/accounts/${encodeURIComponent(id)}/unlock-pass`, { method: 'POST' });
+        if (result.activity) {
+          account.activity_result = result.activity;
+          account.activity_error = '';
+        }
+        const remaining = result.remaining != null ? `，当前 ${result.remaining} 次` : '';
+        const statusPrefix = result.status === 'completed' ? '通行证购买成功' : '通行证购买处理中';
+        setFooter(account, `${statusPrefix}：${formatUSD(result.price_usd)}${remaining}`, result.status === 'completed' ? 'ok' : 'error');
+      } catch (error) {
+        setFooter(account, `购买通行证失败：${error.message}`, 'error');
+      } finally {
+        account.unlocking_pass = false;
+        render();
+        await refreshDrawCountOnly(account);
+        render();
+        focusStatus(account.id);
+      }
+    }
+    async function queryDrawCount(id) {
+      const account = findAccount(id);
+      if (!account || account.querying_draw) return;
+      account.querying_draw = true;
+      render();
+      try {
+        await refreshDrawCountOnly(account);
+      } finally {
+        account.querying_draw = false;
+        render();
+      }
+    }
+    root.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-refresh],[data-checkin],[data-claim],[data-draw],[data-draw-count],[data-activity],[data-purchase-draw],[data-unlock-pass]');
+      if (!button) return;
+      if (button.dataset.refresh) refreshAccount(button.dataset.refresh);
+      else if (button.dataset.checkin) checkinAccount(button.dataset.checkin);
+      else if (button.dataset.claim) claimAccount(button.dataset.claim);
+      else if (button.dataset.draw) drawAccount(button.dataset.draw);
+      else if (button.dataset.drawCount) queryDrawCount(button.dataset.drawCount);
+      else if (button.dataset.activity) queryActivity(button.dataset.activity);
+      else if (button.dataset.purchaseDraw) purchaseDraw(button.dataset.purchaseDraw);
+      else if (button.dataset.unlockPass) unlockPass(button.dataset.unlockPass);
+    });
+    tabsRoot.addEventListener('click', (event) => {
+      const tab = event.target.closest('[data-tab]');
+      if (!tab) return;
+      const id = tab.dataset.tab;
+      if (id === state.activeAccountId) { tab.focus({ preventScroll: true }); return; }
+      state.activeAccountId = id;
+      render();
+      tabsRoot.querySelector('.account-tab[aria-selected="true"]')?.focus({ preventScroll: true });
+    });
+    logsRefreshButton.addEventListener('click', () => {
+      if (!state.logsLoading) loadRuntimeLogs();
+    });
+    renderRuntimeLogs();
+    request('/api/accounts')
+      .then((payload) => {
+        state.accounts = Array.isArray(payload.accounts) ? payload.accounts.map(hydrateAccount) : [];
+        state.activeAccountId = state.accounts[0]?.id || null;
+        render();
+		return refreshAutoDrawStatus();
+      })
+      .catch((error) => {
+        root.innerHTML = `<p class="page-message">${escapeHTML(error.message)}</p>`;
+      });
+    loadRuntimeLogs();
+    window.setInterval(() => {
+      if (document.visibilityState === 'hidden') return;
+      refreshAutoDrawStatus();
+      loadRuntimeLogs();
+    }, 30000);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        refreshAutoDrawStatus();
+        loadRuntimeLogs();
+      }
+    });
+  </script>
+</body>
+</html>

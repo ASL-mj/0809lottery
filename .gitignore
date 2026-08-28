@@ -1,0 +1,12 @@
+# Real credentials and runtime state (kept server-side, never committed)
+lottery-bot.env
+*.local-overrides.env
+data/
+
+# OS noise
+.DS_Store
+
+# AI tool session artifacts
+.omx/
+.superpowers/
+.workbuddy/
