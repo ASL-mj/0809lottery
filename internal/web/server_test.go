@@ -16,6 +16,7 @@ import (
 
 	"skyeapi/lottery-bot/internal/account"
 	"skyeapi/lottery-bot/internal/config"
+	"skyeapi/lottery-bot/internal/quota"
 	"skyeapi/lottery-bot/internal/secret"
 	"skyeapi/lottery-bot/internal/service"
 	"skyeapi/lottery-bot/internal/state"
@@ -185,10 +186,7 @@ func TestRuntimeLogsEndpointReturnsOnlySafeDisplayFields(t *testing.T) {
 		Status:     state.AutoDrawPlanCompleted,
 		Message:    "自动抽奖成功",
 		PrizeLabel: "额度奖励",
-		QuotaDeltaUSD: func() *float64 {
-			value := 1.25
-			return &value
-		}(),
+		QuotaDeltaUSD: testMoneyPtr("1.25"),
 	}); err != nil {
 		t.Fatalf("AppendRuntimeLog() error = %v", err)
 	}
@@ -208,7 +206,7 @@ func TestRuntimeLogsEndpointReturnsOnlySafeDisplayFields(t *testing.T) {
 		t.Fatalf("runtime logs status = %d: %s", recorder.Code, recorder.Body.String())
 	}
 	body := recorder.Body.String()
-	for _, required := range []string{`"logs"`, `"account_label":"账号一"`, `"window_id":"afternoon"`, `"status":"skipped"`, `"quota_delta_usd":1.25`} {
+	for _, required := range []string{`"logs"`, `"account_label":"账号一"`, `"window_id":"afternoon"`, `"status":"skipped"`, `"quota_delta_usd":{"currency":"USD","value":"1.25"`} {
 		if !strings.Contains(body, required) {
 			t.Fatalf("runtime logs response missing %q: %s", required, body)
 		}
@@ -381,9 +379,8 @@ func TestAccountsReturnsTodayCheckinStatus(t *testing.T) {
 		value.Status = state.ActionCompleted
 		value.Message = "签到成功"
 		nativeReward := 1200.0
-		awardUSD := 2.4
 		value.CheckinQuotaAwarded = &nativeReward
-		value.CheckinQuotaAwardedUSD = &awardUSD
+		value.CheckinQuotaAwardedUSD = testMoneyPtr("2.4")
 	}); err != nil {
 		t.Fatalf("complete check-in action = %v", err)
 	}
@@ -391,7 +388,7 @@ func TestAccountsReturnsTodayCheckinStatus(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(recorder, authenticatedRequest(http.MethodGet, "/api/accounts", nil))
-	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"checkin_status":"completed"`) || !strings.Contains(recorder.Body.String(), `"checkin_quota_awarded":2.4`) || strings.Contains(recorder.Body.String(), `"checkin_quota_awarded":1200`) {
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"checkin_status":"completed"`) || !strings.Contains(recorder.Body.String(), `"checkin_quota_awarded":{"currency":"USD","value":"2.4"`) || strings.Contains(recorder.Body.String(), `"checkin_quota_awarded":1200`) {
 		t.Fatalf("accounts check-in status = %d: %s", recorder.Code, recorder.Body.String())
 	}
 }
@@ -427,7 +424,7 @@ func TestAccountsUsesUpstreamCheckinAwardWhenAvailable(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(recorder, authenticatedRequest(http.MethodGet, "/api/accounts", nil))
-	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"checkin_status":"completed"`) || !strings.Contains(recorder.Body.String(), `"checkin_quota_awarded":6.912`) {
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"checkin_status":"completed"`) || !strings.Contains(recorder.Body.String(), `"checkin_quota_awarded":{"currency":"USD","value":"6.912"`) {
 		t.Fatalf("accounts check-in status = %d: %s", recorder.Code, recorder.Body.String())
 	}
 }
@@ -465,7 +462,7 @@ func TestAccountsPersistsRealtimeCheckinCompletion(t *testing.T) {
 
 	first := httptest.NewRecorder()
 	server.Handler().ServeHTTP(first, authenticatedRequest(http.MethodGet, "/api/accounts", nil))
-	if first.Code != http.StatusOK || !strings.Contains(first.Body.String(), `"checkin_status":"completed"`) || !strings.Contains(first.Body.String(), `"checkin_quota_awarded":6.912`) {
+	if first.Code != http.StatusOK || !strings.Contains(first.Body.String(), `"checkin_status":"completed"`) || !strings.Contains(first.Body.String(), `"checkin_quota_awarded":{"currency":"USD","value":"6.912"`) {
 		t.Fatalf("first accounts response = %d: %s", first.Code, first.Body.String())
 	}
 	sharedStore, err := server.sharedStore()
@@ -473,14 +470,14 @@ func TestAccountsPersistsRealtimeCheckinCompletion(t *testing.T) {
 		t.Fatalf("sharedStore() error = %v", err)
 	}
 	action, ok := sharedStore.Action("account-a", today, state.ActionCheckin)
-	if !ok || action.Status != state.ActionCompleted || action.CheckinQuotaAwardedUSD == nil || *action.CheckinQuotaAwardedUSD != 6.912 || !strings.Contains(action.Message, "$6.91") || strings.Contains(action.Message, "3456") {
+	if !ok || action.Status != state.ActionCompleted || action.CheckinQuotaAwardedUSD == nil || action.CheckinQuotaAwardedUSD.Value != "6.912" || !strings.Contains(action.Message, "$6.91") || strings.Contains(action.Message, "3456") {
 		t.Fatalf("reconciled action = %#v, %v", action, ok)
 	}
 
 	serveUpstreamCheckin = false
 	second := httptest.NewRecorder()
 	server.Handler().ServeHTTP(second, authenticatedRequest(http.MethodGet, "/api/accounts", nil))
-	if second.Code != http.StatusOK || !strings.Contains(second.Body.String(), `"checkin_status":"completed"`) || !strings.Contains(second.Body.String(), `"checkin_quota_awarded":6.912`) {
+	if second.Code != http.StatusOK || !strings.Contains(second.Body.String(), `"checkin_status":"completed"`) || !strings.Contains(second.Body.String(), `"checkin_quota_awarded":{"currency":"USD","value":"6.912"`) {
 		t.Fatalf("second accounts response = %d: %s", second.Code, second.Body.String())
 	}
 }
@@ -550,16 +547,16 @@ func TestActivityActionReturnsSanitizedReportAndStoresSnapshot(t *testing.T) {
 	body := recorder.Body.String()
 	for _, expected := range []string{
 		`"account_id":"account-a"`,
-		`"today_spend_usd":12.5`,
+		`"today_spend_usd":{"currency":"USD","value":"12.5"`,
 		`"spend_tier_reached":1`,
 		`"spend_tier_total":2`,
-		`"next_spend_threshold_usd":20`,
-		`"next_spend_remaining_usd":7.5`,
+		`"next_spend_threshold_usd":{"currency":"USD","value":"20"`,
+		`"next_spend_remaining_usd":{"currency":"USD","value":"7.5"`,
 		`"spend_bonus_draws":2`,
 		`"lucky_points":18`,
 		`"lucky_max_points":80`,
-		`"draw_purchase_cost_usd":3`,
-		`"pass_unlock_cost_usd":9`,
+		`"draw_purchase_cost_usd":{"currency":"USD","value":"3"`,
+		`"pass_unlock_cost_usd":{"currency":"USD","value":"9"`,
 		`"pass_unlocked":false`,
 	} {
 		if !strings.Contains(body, expected) {
@@ -636,7 +633,7 @@ func TestPurchaseDrawActionReturnsSanitizedOutcome(t *testing.T) {
 		`"account_id":"account-a"`,
 		`"status":"completed"`,
 		`"message":"购买抽奖次数成功"`,
-		`"price_usd":3`,
+		`"price_usd":{"currency":"USD","value":"3"`,
 		`"remaining":5`,
 		`"activity":{"account_id":"account-a"`,
 		`"purchased_today":2`,
@@ -704,7 +701,7 @@ func TestUnlockPassActionReturnsSanitizedOutcome(t *testing.T) {
 		`"account_id":"account-a"`,
 		`"status":"completed"`,
 		`"message":"今日通行证解锁成功"`,
-		`"price_usd":9`,
+		`"price_usd":{"currency":"USD","value":"9"`,
 		`"remaining":5`,
 		`"activity":{"account_id":"account-a"`,
 		`"pass_unlocked":true`,
@@ -978,7 +975,7 @@ func TestDrawActionReturnsSanitizedOutcomeAndServerGeneratedKey(t *testing.T) {
 		`"remaining_before":1`,
 		`"message":"手动抽奖成功"`,
 		`"prize_label":"额度奖励"`,
-		`"quota_delta_usd":0.5`,
+		`"quota_delta_usd":{"currency":"USD","value":"0.5"`,
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("draw response missing %q: %s", expected, body)
@@ -1308,4 +1305,14 @@ func TestIndexContainsOnlyAccountControls(t *testing.T) {
 			t.Fatalf("index contains removed control %q", forbidden)
 		}
 	}
+}
+
+
+func testMoneyPtr(raw string) *quota.Money {
+	amount, err := quota.ParseUSD(raw)
+	if err != nil {
+		panic(err)
+	}
+	money := quota.NewAlreadyUSDPolicy().Convert(amount, quota.Provenance{Source: "test"})
+	return &money
 }

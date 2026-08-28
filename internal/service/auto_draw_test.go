@@ -13,8 +13,22 @@ import (
 	"skyeapi/lottery-bot/internal/auth"
 	"skyeapi/lottery-bot/internal/config"
 	"skyeapi/lottery-bot/internal/lottery"
+	"skyeapi/lottery-bot/internal/quota"
 	"skyeapi/lottery-bot/internal/state"
 )
+
+func testMoney(raw string) quota.Money {
+	amount, err := quota.ParseUSD(raw)
+	if err != nil {
+		panic(err)
+	}
+	return quota.NewAlreadyUSDPolicy().Convert(amount, quota.Provenance{Source: "test"})
+}
+
+func testMoneyPointer(raw string) *quota.Money {
+	money := testMoney(raw)
+	return &money
+}
 
 func TestAutoDrawSchedulerCreatesOneRandomPlanPerAccountAndWindow(t *testing.T) {
 	store := openAutoDrawTestStore(t)
@@ -67,12 +81,11 @@ func TestAutoDrawSchedulerCompletesDuePlanOnlyOnce(t *testing.T) {
 	store := openAutoDrawTestStore(t)
 	now := autoDrawTime(2026, time.August, 8, 7, 0, 0)
 	calls := 0
-	quota := 1.25
 	scheduler := newAutoDrawTestScheduler(store, []string{"account-a"}, &now, []int{0, 0, 0}, func(context.Context, string, string) (DrawAvailableOutcome, error) {
 		calls++
 		return DrawAvailableOutcome{
 			Result:        &lottery.DrawResult{Prize: lottery.Prize{ShortLabel: "额度奖励"}},
-			QuotaDeltaUSD: &quota,
+			QuotaDeltaUSD: testMoneyPointer("1.25"),
 		}, nil
 	})
 	if err := scheduler.Tick(context.Background()); err != nil {
@@ -89,11 +102,11 @@ func TestAutoDrawSchedulerCompletesDuePlanOnlyOnce(t *testing.T) {
 		t.Fatalf("draw calls = %d, want 1", calls)
 	}
 	morning := findAutoDrawPlan(t, store, now.Format("2006-01-02"), "account-a", "morning")
-	if morning.Status != state.AutoDrawPlanCompleted || morning.PrizeLabel != "额度奖励" || morning.QuotaDeltaUSD == nil || *morning.QuotaDeltaUSD != quota || morning.ExecutedAt.IsZero() {
+	if morning.Status != state.AutoDrawPlanCompleted || morning.PrizeLabel != "额度奖励" || morning.QuotaDeltaUSD == nil || morning.QuotaDeltaUSD.Value != "1.25" || morning.ExecutedAt.IsZero() {
 		t.Fatalf("finished plan = %#v", morning)
 	}
 	logs := store.RuntimeLogs(10)
-	if len(logs) != 1 || logs[0].Status != state.AutoDrawPlanCompleted || logs[0].PrizeLabel != "额度奖励" || logs[0].QuotaDeltaUSD == nil || *logs[0].QuotaDeltaUSD != quota {
+	if len(logs) != 1 || logs[0].Status != state.AutoDrawPlanCompleted || logs[0].PrizeLabel != "额度奖励" || logs[0].QuotaDeltaUSD == nil || logs[0].QuotaDeltaUSD.Value != "1.25" {
 		t.Fatalf("runtime logs = %#v", logs)
 	}
 }

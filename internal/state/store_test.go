@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"skyeapi/lottery-bot/internal/quota"
 )
 
 func TestStorePersistsAuth(t *testing.T) {
@@ -109,7 +111,7 @@ func TestStoreRotateRepeatableActionRotatesCompletedAndRetryableFailed(t *testin
 				value.Retryable = tc.status == ActionFailed
 				value.SideEffectStarted = false
 				value.Attempts = 3
-				value.PriceUSD = float64Ptr(1.25)
+				value.PriceUSD = testMoneyPtr("1.25")
 				value.PurchaseBeforeToday = intPointer(1)
 				value.PurchaseBeforeRemaining = intPointer(0)
 				value.PassBeforeUnlocked = boolPointer(false)
@@ -237,7 +239,7 @@ func TestStoreActionCopiesPurchaseEvidencePointers(t *testing.T) {
 		t.Fatalf("GetOrCreateAction() error = %v", err)
 	}
 	if _, err := store.UpdateAction(action.Key, func(value *Action) {
-		value.PriceUSD = float64Ptr(1.25)
+		value.PriceUSD = testMoneyPtr("1.25")
 		value.PurchaseBeforeToday = intPointer(2)
 		value.PurchaseBeforeRemaining = intPointer(1)
 		value.PassBeforeUnlocked = boolPointer(false)
@@ -249,7 +251,7 @@ func TestStoreActionCopiesPurchaseEvidencePointers(t *testing.T) {
 	if !ok {
 		t.Fatal("Action() missing")
 	}
-	*loaded.PriceUSD = 9.9
+	loaded.PriceUSD.Value = "9.9"
 	*loaded.PurchaseBeforeToday = 9
 	*loaded.PurchaseBeforeRemaining = 9
 	*loaded.PassBeforeUnlocked = true
@@ -258,7 +260,7 @@ func TestStoreActionCopiesPurchaseEvidencePointers(t *testing.T) {
 	if !ok {
 		t.Fatal("Action() missing on reload")
 	}
-	if reloaded.PriceUSD == nil || *reloaded.PriceUSD != 1.25 || reloaded.PurchaseBeforeToday == nil || *reloaded.PurchaseBeforeToday != 2 || reloaded.PurchaseBeforeRemaining == nil || *reloaded.PurchaseBeforeRemaining != 1 || reloaded.PassBeforeUnlocked == nil || *reloaded.PassBeforeUnlocked {
+	if reloaded.PriceUSD == nil || reloaded.PriceUSD.Value != "1.25" || reloaded.PurchaseBeforeToday == nil || *reloaded.PurchaseBeforeToday != 2 || reloaded.PurchaseBeforeRemaining == nil || *reloaded.PurchaseBeforeRemaining != 1 || reloaded.PassBeforeUnlocked == nil || *reloaded.PassBeforeUnlocked {
 		t.Fatalf("Action() returned aliased purchase evidence pointers: %#v", reloaded)
 	}
 }
@@ -335,7 +337,7 @@ func TestStoreBeginAutoDrawPlanHonorsTerminalAndRecoversRunning(t *testing.T) {
 	created, err := store.EnsureAutoDrawPlans([]AutoDrawPlan{
 		{Date: "2026-08-07", AccountID: "account-a", WindowID: "window-pending", PlannedAt: time.Date(2026, time.August, 7, 9, 0, 0, 0, time.UTC)},
 		{Date: "2026-08-07", AccountID: "account-a", WindowID: "window-running", PlannedAt: time.Date(2026, time.August, 7, 10, 0, 0, 0, time.UTC), Status: AutoDrawPlanRunning},
-		{Date: "2026-08-07", AccountID: "account-a", WindowID: "window-complete", PlannedAt: time.Date(2026, time.August, 7, 11, 0, 0, 0, time.UTC), Status: AutoDrawPlanCompleted, ExecutedAt: time.Date(2026, time.August, 7, 11, 5, 0, 0, time.UTC), Message: "done", PrizeLabel: "quota", QuotaDeltaUSD: float64Ptr(0.5)},
+		{Date: "2026-08-07", AccountID: "account-a", WindowID: "window-complete", PlannedAt: time.Date(2026, time.August, 7, 11, 0, 0, 0, time.UTC), Status: AutoDrawPlanCompleted, ExecutedAt: time.Date(2026, time.August, 7, 11, 5, 0, 0, time.UTC), Message: "done", PrizeLabel: "quota", QuotaDeltaUSD: testMoneyPtr("0.5")},
 	})
 	if err != nil {
 		t.Fatalf("EnsureAutoDrawPlans() error = %v", err)
@@ -349,11 +351,11 @@ func TestStoreBeginAutoDrawPlanHonorsTerminalAndRecoversRunning(t *testing.T) {
 		t.Fatalf("BeginAutoDrawPlan(pending) plan = %#v", pendingStarted)
 	}
 
-	finished, err := store.FinishAutoDrawPlan(created[0].Key, AutoDrawPlanCompleted, "safe complete", "quota +1", float64Ptr(1.25), time.Date(2026, time.August, 7, 9, 15, 0, 0, time.UTC))
+	finished, err := store.FinishAutoDrawPlan(created[0].Key, AutoDrawPlanCompleted, "safe complete", "quota +1", testMoneyPtr("1.25"), time.Date(2026, time.August, 7, 9, 15, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatalf("FinishAutoDrawPlan() error = %v", err)
 	}
-	if finished.Status != AutoDrawPlanCompleted || finished.Message != "safe complete" || finished.PrizeLabel != "quota +1" || finished.QuotaDeltaUSD == nil || *finished.QuotaDeltaUSD != 1.25 {
+	if finished.Status != AutoDrawPlanCompleted || finished.Message != "safe complete" || finished.PrizeLabel != "quota +1" || finished.QuotaDeltaUSD == nil || finished.QuotaDeltaUSD.Value != "1.25" {
 		t.Fatalf("FinishAutoDrawPlan() = %#v", finished)
 	}
 
@@ -392,7 +394,7 @@ func TestStoreRuntimeLogsNewestFirstAndCopiesQuotaPointers(t *testing.T) {
 		WindowID:      "window-1",
 		Status:        AutoDrawPlanRunning,
 		Message:       "safe start",
-		QuotaDeltaUSD: float64Ptr(0.25),
+		QuotaDeltaUSD: testMoneyPtr("0.25"),
 	})
 	if err != nil {
 		t.Fatalf("AppendRuntimeLog(first) error = %v", err)
@@ -404,7 +406,7 @@ func TestStoreRuntimeLogsNewestFirstAndCopiesQuotaPointers(t *testing.T) {
 		Status:        AutoDrawPlanCompleted,
 		Message:       "safe finish",
 		PrizeLabel:    "quota +1",
-		QuotaDeltaUSD: float64Ptr(1.0),
+		QuotaDeltaUSD: testMoneyPtr("1"),
 	})
 	if err != nil {
 		t.Fatalf("AppendRuntimeLog(second) error = %v", err)
@@ -414,10 +416,10 @@ func TestStoreRuntimeLogsNewestFirstAndCopiesQuotaPointers(t *testing.T) {
 	if len(logs) != 2 || logs[0].ID != second.ID || logs[1].ID != first.ID {
 		t.Fatalf("RuntimeLogs() = %#v", logs)
 	}
-	*logs[0].QuotaDeltaUSD = 9.9
+	logs[0].QuotaDeltaUSD.Value = "9.9"
 
 	reloaded := store.RuntimeLogs(1)
-	if len(reloaded) != 1 || reloaded[0].QuotaDeltaUSD == nil || *reloaded[0].QuotaDeltaUSD != 1.0 {
+	if len(reloaded) != 1 || reloaded[0].QuotaDeltaUSD == nil || reloaded[0].QuotaDeltaUSD.Value != "1" {
 		t.Fatalf("RuntimeLogs() returned aliased quota pointer: %#v", reloaded)
 	}
 }
@@ -702,4 +704,14 @@ func float64Ptr(value float64) *float64 {
 
 func boolPointer(value bool) *bool {
 	return &value
+}
+
+
+func testMoneyPtr(raw string) *quota.Money {
+	amount, err := quota.ParseUSD(raw)
+	if err != nil {
+		panic(err)
+	}
+	money := quota.NewAlreadyUSDPolicy().Convert(amount, quota.Provenance{Source: "test"})
+	return &money
 }

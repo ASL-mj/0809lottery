@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"skyeapi/lottery-bot/internal/account"
+	"skyeapi/lottery-bot/internal/quota"
 )
 
 // version is the newest state version written by this build. Version-3 files
@@ -82,14 +83,14 @@ type Action struct {
 	Attempts                int          `json:"attempts,omitempty"`
 	SideEffectStarted       bool         `json:"side_effect_started,omitempty"`
 	Retryable               bool         `json:"retryable,omitempty"`
-	PriceUSD                *float64     `json:"price_usd,omitempty"`
+	PriceUSD                *quota.Money `json:"price_usd,omitempty"`
 	ClaimBeforeRemaining    *int         `json:"claim_before_remaining,omitempty"`
 	ClaimAfterRemaining     *int         `json:"claim_after_remaining,omitempty"`
 	PurchaseBeforeToday     *int         `json:"purchase_before_today,omitempty"`
 	PurchaseBeforeRemaining *int         `json:"purchase_before_remaining,omitempty"`
 	PassBeforeUnlocked      *bool        `json:"pass_before_unlocked,omitempty"`
 	CheckinQuotaAwarded     *float64     `json:"checkin_quota_awarded,omitempty"`
-	CheckinQuotaAwardedUSD  *float64     `json:"checkin_quota_awarded_usd,omitempty"`
+	CheckinQuotaAwardedUSD  *quota.Money `json:"checkin_quota_awarded_usd,omitempty"`
 	Message                 string       `json:"message,omitempty"`
 	LastError               string       `json:"last_error,omitempty"`
 	Result                  *DrawSummary `json:"result,omitempty"`
@@ -125,7 +126,7 @@ type AutoDrawPlan struct {
 	ExecutedAt     time.Time          `json:"executed_at,omitempty"`
 	Message        string             `json:"message,omitempty"`
 	PrizeLabel     string             `json:"prize_label,omitempty"`
-	QuotaDeltaUSD  *float64           `json:"quota_delta_usd,omitempty"`
+	QuotaDeltaUSD  *quota.Money       `json:"quota_delta_usd,omitempty"`
 	CreatedAt      time.Time          `json:"created_at"`
 	UpdatedAt      time.Time          `json:"updated_at"`
 }
@@ -138,7 +139,7 @@ type RuntimeLog struct {
 	Status        AutoDrawPlanStatus `json:"status"`
 	Message       string             `json:"message,omitempty"`
 	PrizeLabel    string             `json:"prize_label,omitempty"`
-	QuotaDeltaUSD *float64           `json:"quota_delta_usd,omitempty"`
+	QuotaDeltaUSD *quota.Money       `json:"quota_delta_usd,omitempty"`
 }
 
 type diskState struct {
@@ -611,7 +612,7 @@ func (s *Store) BeginAutoDrawPlan(key string) (AutoDrawPlan, bool, error) {
 	return copyAutoDrawPlan(plan), true, nil
 }
 
-func (s *Store) FinishAutoDrawPlan(key string, status AutoDrawPlanStatus, message, prize string, quota *float64, executedAt time.Time) (AutoDrawPlan, error) {
+func (s *Store) FinishAutoDrawPlan(key string, status AutoDrawPlanStatus, message, prize string, delta *quota.Money, executedAt time.Time) (AutoDrawPlan, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -637,7 +638,7 @@ func (s *Store) FinishAutoDrawPlan(key string, status AutoDrawPlanStatus, messag
 	plan.Status = status
 	plan.Message = message
 	plan.PrizeLabel = prize
-	plan.QuotaDeltaUSD = copyFloat64Pointer(quota)
+	plan.QuotaDeltaUSD = copyMoney(delta)
 	if executedAt.IsZero() {
 		executedAt = time.Now().UTC()
 	} else {
@@ -873,13 +874,21 @@ func copyAuth(value AuthState) AuthState {
 }
 
 func copyAutoDrawPlan(value AutoDrawPlan) AutoDrawPlan {
-	value.QuotaDeltaUSD = copyFloat64Pointer(value.QuotaDeltaUSD)
+	value.QuotaDeltaUSD = copyMoney(value.QuotaDeltaUSD)
 	return value
 }
 
 func copyRuntimeLog(value RuntimeLog) RuntimeLog {
-	value.QuotaDeltaUSD = copyFloat64Pointer(value.QuotaDeltaUSD)
+	value.QuotaDeltaUSD = copyMoney(value.QuotaDeltaUSD)
 	return value
+}
+
+func copyMoney(value *quota.Money) *quota.Money {
+	if value == nil {
+		return nil
+	}
+	copied := *value
+	return &copied
 }
 
 func copyAction(value Action) Action {
@@ -887,10 +896,7 @@ func copyAction(value Action) Action {
 		result := *value.Result
 		value.Result = &result
 	}
-	if value.PriceUSD != nil {
-		price := *value.PriceUSD
-		value.PriceUSD = &price
-	}
+	value.PriceUSD = copyMoney(value.PriceUSD)
 	if value.ClaimBeforeRemaining != nil {
 		before := *value.ClaimBeforeRemaining
 		value.ClaimBeforeRemaining = &before
@@ -903,10 +909,7 @@ func copyAction(value Action) Action {
 		quota := *value.CheckinQuotaAwarded
 		value.CheckinQuotaAwarded = &quota
 	}
-	if value.CheckinQuotaAwardedUSD != nil {
-		quotaUSD := *value.CheckinQuotaAwardedUSD
-		value.CheckinQuotaAwardedUSD = &quotaUSD
-	}
+	value.CheckinQuotaAwardedUSD = copyMoney(value.CheckinQuotaAwardedUSD)
 	if value.PurchaseBeforeToday != nil {
 		beforeToday := *value.PurchaseBeforeToday
 		value.PurchaseBeforeToday = &beforeToday
@@ -983,7 +986,7 @@ func normalizeAutoDrawPlan(plan AutoDrawPlan, preserveTimestamps bool) (AutoDraw
 		ExecutedAt:     plan.ExecutedAt.UTC(),
 		Message:        message,
 		PrizeLabel:     prize,
-		QuotaDeltaUSD:  copyFloat64Pointer(plan.QuotaDeltaUSD),
+		QuotaDeltaUSD:  copyMoney(plan.QuotaDeltaUSD),
 		CreatedAt:      plan.CreatedAt.UTC(),
 		UpdatedAt:      plan.UpdatedAt.UTC(),
 	}
@@ -1045,7 +1048,7 @@ func normalizeRuntimeLog(log RuntimeLog) (RuntimeLog, error) {
 		Status:        status,
 		Message:       message,
 		PrizeLabel:    prize,
-		QuotaDeltaUSD: copyFloat64Pointer(log.QuotaDeltaUSD),
+		QuotaDeltaUSD: copyMoney(log.QuotaDeltaUSD),
 	}, nil
 }
 

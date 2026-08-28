@@ -17,6 +17,7 @@ import (
 	"skyeapi/lottery-bot/internal/auth"
 	"skyeapi/lottery-bot/internal/config"
 	"skyeapi/lottery-bot/internal/lottery"
+	"skyeapi/lottery-bot/internal/quota"
 	"skyeapi/lottery-bot/internal/secret"
 	"skyeapi/lottery-bot/internal/state"
 )
@@ -610,7 +611,7 @@ func TestRunnerCheckinReconcilesFailedLocalActionWithUpstreamSuccess(t *testing.
 	if err != nil {
 		t.Fatalf("Checkin() error = %v", err)
 	}
-	if outcome.Action.Status != state.ActionCompleted || !outcome.AlreadyRecorded || client.checkinCalls != 0 || outcome.Action.LastError != "" || outcome.Action.CheckinQuotaAwardedUSD == nil || *outcome.Action.CheckinQuotaAwardedUSD != 0.983454 {
+	if outcome.Action.Status != state.ActionCompleted || !outcome.AlreadyRecorded || client.checkinCalls != 0 || outcome.Action.LastError != "" || outcome.Action.CheckinQuotaAwardedUSD == nil || outcome.Action.CheckinQuotaAwardedUSD.Value != "0.983454" {
 		t.Fatalf("unexpected reconciled outcome=%#v client=%#v", outcome, client)
 	}
 }
@@ -712,7 +713,7 @@ func TestRunnerCheckinStatusReusesAndRecoversParentToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CheckinStatus() error = %v", err)
 	}
-	if !status.CheckedInToday || status.TodayQuotaAwardedUSD == nil || *status.TodayQuotaAwardedUSD != 2.4 || client.checkinStatusCalls != 2 || client.loginCalls != 0 || client.refreshCalls != 1 {
+	if !status.CheckedInToday || status.TodayQuotaAwardedUSD == nil || status.TodayQuotaAwardedUSD.Value != "2.4" || client.checkinStatusCalls != 2 || client.loginCalls != 0 || client.refreshCalls != 1 {
 		t.Fatalf("unexpected check-in status=%#v client=%#v", status, client)
 	}
 	if auth := store.Auth("account-a"); auth.ParentAccessToken != "refreshed-parent" {
@@ -768,7 +769,7 @@ func TestRunnerQueryUsageStoresSanitizedSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QueryUsage() error = %v", err)
 	}
-	if usage.Quota != 1000 || usage.UsedQuota != 250 || usage.RequestCount != 7 || usage.QuotaUSD == nil || *usage.QuotaUSD != 2 || usage.UsedQuotaUSD == nil || *usage.UsedQuotaUSD != 0.5 {
+	if usage.Quota != 1000 || usage.UsedQuota != 250 || usage.RequestCount != 7 || usage.QuotaUSD == nil || usage.QuotaUSD.Value != "2" || usage.UsedQuotaUSD == nil || usage.UsedQuotaUSD.Value != "0.5" {
 		t.Fatalf("usage = %#v", usage)
 	}
 	snapshot, ok := store.Snapshot("account-a", "usage")
@@ -783,11 +784,11 @@ func TestRunnerQueryActivityComputesSpendTierProgress(t *testing.T) {
 		todaySpend    float64
 		wantReached   int
 		wantTotal     int
-		wantThreshold *float64
-		wantRemaining *float64
+		wantThreshold float64
+		wantRemaining float64
 	}{
-		{name: "zero tiers reached", todaySpend: 1, wantReached: 0, wantTotal: 3, wantThreshold: float64Ptr(5), wantRemaining: float64Ptr(4)},
-		{name: "partial tiers reached", todaySpend: 8, wantReached: 1, wantTotal: 3, wantThreshold: float64Ptr(10), wantRemaining: float64Ptr(2)},
+		{name: "zero tiers reached", todaySpend: 1, wantReached: 0, wantTotal: 3, wantThreshold: 5, wantRemaining: 4},
+		{name: "partial tiers reached", todaySpend: 8, wantReached: 1, wantTotal: 3, wantThreshold: 10, wantRemaining: 2},
 		{name: "all tiers reached", todaySpend: 15, wantReached: 3, wantTotal: 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -822,11 +823,11 @@ func TestRunnerQueryActivityComputesSpendTierProgress(t *testing.T) {
 			if report.SpendTierReached != tc.wantReached || report.SpendTierTotal != tc.wantTotal {
 				t.Fatalf("tier progress = reached %d total %d, want %d/%d", report.SpendTierReached, report.SpendTierTotal, tc.wantReached, tc.wantTotal)
 			}
-			if !equalFloatPtr(report.NextSpendThresholdUSD, tc.wantThreshold) {
-				t.Fatalf("NextSpendThresholdUSD = %#v, want %#v", report.NextSpendThresholdUSD, tc.wantThreshold)
+			if !equalMoneyPtr(report.NextSpendThresholdUSD, tc.wantThreshold) {
+				t.Fatalf("NextSpendThresholdUSD = %#v, want %v", report.NextSpendThresholdUSD, tc.wantThreshold)
 			}
-			if !equalFloatPtr(report.NextSpendRemainingUSD, tc.wantRemaining) {
-				t.Fatalf("NextSpendRemainingUSD = %#v, want %#v", report.NextSpendRemainingUSD, tc.wantRemaining)
+			if !equalMoneyPtr(report.NextSpendRemainingUSD, tc.wantRemaining) {
+				t.Fatalf("NextSpendRemainingUSD = %#v, want %v", report.NextSpendRemainingUSD, tc.wantRemaining)
 			}
 		})
 	}
@@ -880,13 +881,13 @@ func TestRunnerQueryActivitySupportsAliasesAndStoresSanitizedSnapshot(t *testing
 	if err != nil {
 		t.Fatalf("QueryActivity() error = %v", err)
 	}
-	if report.TodaySpendUSD != 12.5 || report.SpendBonusDraws != 2 || report.LuckyPoints != 11 || report.LuckyMaxPoints != 20 {
+	if report.TodaySpendUSD.Value != "12.5" || report.SpendBonusDraws != 2 || report.LuckyPoints != 11 || report.LuckyMaxPoints != 20 {
 		t.Fatalf("unexpected alias fields in report = %#v", report)
 	}
-	if report.DrawPurchaseCostUSD == nil || *report.DrawPurchaseCostUSD != 1.25 || report.PurchasedToday != 3 || report.PurchasePending != 1 || report.PurchaseUnknown != 2 {
+	if report.DrawPurchaseCostUSD == nil || report.DrawPurchaseCostUSD.Value != "1.25" || report.PurchasedToday != 3 || report.PurchasePending != 1 || report.PurchaseUnknown != 2 {
 		t.Fatalf("unexpected purchase fields in report = %#v", report)
 	}
-	if report.SpendTierTotal != 2 || report.PassUnlockCostUSD == nil || *report.PassUnlockCostUSD != 3 || !report.PassUnlocked || report.DayKey != "2026-08-07" {
+	if report.SpendTierTotal != 2 || report.PassUnlockCostUSD == nil || report.PassUnlockCostUSD.Value != "3" || !report.PassUnlocked || report.DayKey != "2026-08-07" {
 		t.Fatalf("unexpected draw-limit fields in report = %#v", report)
 	}
 	if report.SpendTierReached != 2 || report.NextSpendThresholdUSD != nil || report.NextSpendRemainingUSD != nil {
@@ -953,7 +954,7 @@ func TestRunnerQueryActivitySupportsPurchasePriceAlias(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QueryActivity() error = %v", err)
 	}
-	if report.DrawPurchaseCostUSD == nil || *report.DrawPurchaseCostUSD != 2.5 {
+	if report.DrawPurchaseCostUSD == nil || report.DrawPurchaseCostUSD.Value != "2.5" {
 		t.Fatalf("DrawPurchaseCostUSD = %#v, want 2.5", report.DrawPurchaseCostUSD)
 	}
 }
@@ -1287,7 +1288,7 @@ func TestRunnerDrawAvailableComputesQuotaDeltaUSDAndRedactsJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DrawAvailable() error = %v", err)
 	}
-	if outcome.QuotaDeltaUSD == nil || *outcome.QuotaDeltaUSD != 0.5 {
+	if outcome.QuotaDeltaUSD == nil || outcome.QuotaDeltaUSD.Value != "0.5" {
 		t.Fatalf("unexpected quota delta = %#v", outcome)
 	}
 	payload, err := json.Marshal(outcome)
@@ -1327,7 +1328,7 @@ func TestRunnerDrawAvailableIgnoresQuotaConversionFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DrawAvailable() error = %v", err)
 	}
-	if outcome.Result == nil || outcome.Result.ID != "draw-1" || outcome.QuotaDeltaUSD != nil {
+	if outcome.Result == nil || outcome.Result.ID != "draw-1" || outcome.QuotaDeltaUSD == nil || outcome.QuotaDeltaUSD.State != quota.StateUnavailable {
 		t.Fatalf("unexpected outcome = %#v", outcome)
 	}
 }
@@ -1745,13 +1746,13 @@ func TestRunnerPurchaseDrawSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PurchaseDraw() error = %v", err)
 	}
-	if outcome.AlreadyRecorded || outcome.Status != string(state.ActionCompleted) || outcome.PriceUSD == nil || *outcome.PriceUSD != 1.25 || outcome.Remaining == nil || *outcome.Remaining != 2 {
+	if outcome.AlreadyRecorded || outcome.Status != string(state.ActionCompleted) || outcome.PriceUSD == nil || outcome.PriceUSD.Value != "1.25" || outcome.Remaining == nil || *outcome.Remaining != 2 {
 		t.Fatalf("unexpected outcome = %#v", outcome)
 	}
 	if outcome.Activity == nil || outcome.Activity.PurchasedToday != 2 {
 		t.Fatalf("activity = %#v, want purchased today 2", outcome.Activity)
 	}
-	if outcome.Action.Status != state.ActionCompleted || outcome.Action.PurchaseBeforeToday == nil || *outcome.Action.PurchaseBeforeToday != 1 || outcome.Action.PurchaseBeforeRemaining == nil || *outcome.Action.PurchaseBeforeRemaining != 0 || outcome.Action.PriceUSD == nil || *outcome.Action.PriceUSD != 1.25 || outcome.Action.SideEffectStarted {
+	if outcome.Action.Status != state.ActionCompleted || outcome.Action.PurchaseBeforeToday == nil || *outcome.Action.PurchaseBeforeToday != 1 || outcome.Action.PurchaseBeforeRemaining == nil || *outcome.Action.PurchaseBeforeRemaining != 0 || outcome.Action.PriceUSD == nil || outcome.Action.PriceUSD.Value != "1.25" || outcome.Action.SideEffectStarted {
 		t.Fatalf("unexpected action = %#v", outcome.Action)
 	}
 	snapshot, ok := store.Snapshot("account-a", "activity")
@@ -2124,7 +2125,7 @@ func TestRunnerUnlockDailyPassSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UnlockDailyPass() error = %v", err)
 	}
-	if outcome.Status != string(state.ActionCompleted) || outcome.PriceUSD == nil || *outcome.PriceUSD != 3 || outcome.Activity == nil || !outcome.Activity.PassUnlocked {
+	if outcome.Status != string(state.ActionCompleted) || outcome.PriceUSD == nil || outcome.PriceUSD.Value != "3" || outcome.Activity == nil || !outcome.Activity.PassUnlocked {
 		t.Fatalf("unexpected outcome = %#v", outcome)
 	}
 	if outcome.Action.PassBeforeUnlocked == nil || *outcome.Action.PassBeforeUnlocked {
@@ -2382,7 +2383,7 @@ func TestPurchaseOutcomeMarshalJSONOmitsSensitiveFields(t *testing.T) {
 		AccountID: "account-a",
 		Status:    string(state.ActionCompleted),
 		Message:   "购买成功",
-		PriceUSD:  float64Ptr(1.25),
+		PriceUSD:  moneyPtr("1.25"),
 		Remaining: intPointer(2),
 		Activity:  &ActivityReport{AccountID: "account-a", PurchasedToday: 2},
 		Action: state.Action{
@@ -2402,7 +2403,7 @@ func TestPurchaseOutcomeMarshalJSONOmitsSensitiveFields(t *testing.T) {
 			t.Fatalf("json payload leaked %q: %s", forbidden, text)
 		}
 	}
-	for _, required := range []string{`"account_id":"account-a"`, `"status":"completed"`, `"price_usd":1.25`, `"remaining":2`, `"activity"`} {
+	for _, required := range []string{`"account_id":"account-a"`, `"status":"completed"`, `"price_usd":{"currency":"USD","value":"1.25"`, `"remaining":2`, `"activity"`} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("json payload missing %q: %s", required, text)
 		}
@@ -2447,6 +2448,18 @@ func dashboardWithPassDayKey(unlocked bool, remaining, unlockCost int, dayKey st
 
 func float64Ptr(value float64) *float64 {
 	return &value
+}
+
+func equalMoneyPtr(got *quota.Money, want float64) bool {
+	if got == nil {
+		return want == 0
+	}
+	amount, err := quota.ParseUSDFloat(want)
+	if err != nil {
+		return false
+	}
+	wantMoney := quota.NewAlreadyUSDPolicy().Convert(amount, quota.Provenance{Source: "test"})
+	return got.Value == wantMoney.Value
 }
 
 func equalFloatPtr(got, want *float64) bool {
@@ -2550,4 +2563,17 @@ func testRunner(t *testing.T, store *state.Store, client *fakeClient, now time.T
 	runner.now = func() time.Time { return now }
 	runner.wait = func(context.Context, time.Duration) error { return nil }
 	return runner
+}
+
+func moneyValue(raw string) quota.Money {
+	amount, err := quota.ParseUSD(raw)
+	if err != nil {
+		panic(err)
+	}
+	return quota.NewAlreadyUSDPolicy().Convert(amount, quota.Provenance{Source: "test"})
+}
+
+func moneyPtr(raw string) *quota.Money {
+	money := moneyValue(raw)
+	return &money
 }

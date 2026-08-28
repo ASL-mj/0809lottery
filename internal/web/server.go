@@ -20,6 +20,7 @@ import (
 	"skyeapi/lottery-bot/internal/auth"
 	"skyeapi/lottery-bot/internal/config"
 	"skyeapi/lottery-bot/internal/lottery"
+	"skyeapi/lottery-bot/internal/quota"
 	"skyeapi/lottery-bot/internal/secret"
 	"skyeapi/lottery-bot/internal/service"
 	"skyeapi/lottery-bot/internal/state"
@@ -212,8 +213,8 @@ func (s *Server) handleRuntimeLogs(writer http.ResponseWriter, request *http.Req
 		WindowID      string    `json:"window_id"`
 		Status        string    `json:"status"`
 		Message       string    `json:"message"`
-		PrizeLabel    string    `json:"prize_label,omitempty"`
-		QuotaDeltaUSD *float64  `json:"quota_delta_usd,omitempty"`
+		PrizeLabel    string        `json:"prize_label,omitempty"`
+		QuotaDeltaUSD *quota.Money  `json:"quota_delta_usd,omitempty"`
 	}
 	logs := store.RuntimeLogs(maxRuntimeLogs)
 	response := make([]runtimeLogView, 0, len(logs))
@@ -251,10 +252,10 @@ func (s *Server) handleAutoDrawStatus(writer http.ResponseWriter, request *http.
 		WindowID      string     `json:"window_id"`
 		PlannedAt     *time.Time `json:"planned_at,omitempty"`
 		ExecutedAt    *time.Time `json:"executed_at,omitempty"`
-		Status        string     `json:"status"`
-		Message       string     `json:"message,omitempty"`
-		PrizeLabel    string     `json:"prize_label,omitempty"`
-		QuotaDeltaUSD *float64   `json:"quota_delta_usd,omitempty"`
+		Status        string      `json:"status"`
+		Message       string      `json:"message,omitempty"`
+		PrizeLabel    string      `json:"prize_label,omitempty"`
+		QuotaDeltaUSD *quota.Money `json:"quota_delta_usd,omitempty"`
 	}
 	type accountView struct {
 		AccountID string       `json:"account_id"`
@@ -370,14 +371,14 @@ func (s *Server) handleAccounts(writer http.ResponseWriter, request *http.Reques
 			"checkin_status": "pending",
 			"claim_status":   "pending",
 		}
-		var storedCheckinAwardUSD *float64
+		var storedCheckinAward *quota.Money
 		if action, ok := store.Action(id, today, state.ActionCheckin); ok {
 			item["checkin_status"] = action.Status
 			item["checkin_message"] = action.Message
 			if action.CheckinQuotaAwardedUSD != nil {
-				awardUSD := *action.CheckinQuotaAwardedUSD
-				storedCheckinAwardUSD = &awardUSD
-				item["checkin_quota_awarded"] = awardUSD
+				award := *action.CheckinQuotaAwardedUSD
+				storedCheckinAward = &award
+				item["checkin_quota_awarded"] = award
 			}
 		}
 		if action, ok := store.Action(id, today, state.ActionDailyClaim); ok {
@@ -404,8 +405,8 @@ func (s *Server) handleAccounts(writer http.ResponseWriter, request *http.Reques
 				item["checkin_message"] = completedCheckinMessage(checkinStatus.TodayQuotaAwardedUSD)
 				if checkinStatus.TodayQuotaAwardedUSD != nil {
 					item["checkin_quota_awarded"] = *checkinStatus.TodayQuotaAwardedUSD
-				} else if storedCheckinAwardUSD != nil {
-					item["checkin_quota_awarded"] = *storedCheckinAwardUSD
+				} else if storedCheckinAward != nil {
+					item["checkin_quota_awarded"] = *storedCheckinAward
 				}
 			}
 		}
@@ -491,7 +492,7 @@ func (s *Server) handleCheckinAction(writer http.ResponseWriter, request *http.R
 		writeUpstreamError(writer, "checkin", accountID, err, "签到暂时失败，请稍后重试")
 		return
 	}
-	awardUSD := outcome.Action.CheckinQuotaAwardedUSD
+	award := outcome.Action.CheckinQuotaAwardedUSD
 	checkinMessage := outcome.Action.Message
 	if outcome.Action.Status == state.ActionCompleted {
 		if status, statusErr := runner.CheckinStatus(ctx, accountID); statusErr == nil {
@@ -501,19 +502,19 @@ func (s *Server) handleCheckinAction(writer http.ResponseWriter, request *http.R
 					return
 				}
 				if status.TodayQuotaAwardedUSD != nil {
-					awardUSD = status.TodayQuotaAwardedUSD
+					award = status.TodayQuotaAwardedUSD
 				}
 			}
 		}
-		if awardUSD != nil {
-			checkinMessage = completedCheckinMessage(awardUSD)
+		if award != nil {
+			checkinMessage = completedCheckinMessage(award)
 		}
 	}
 	writeJSON(writer, http.StatusOK, map[string]interface{}{
 		"account_id":            accountID,
 		"checkin_status":        outcome.Action.Status,
 		"checkin_message":       checkinMessage,
-		"checkin_quota_awarded": awardUSD,
+		"checkin_quota_awarded": award,
 		"already_completed":     outcome.AlreadyRecorded && outcome.Action.Status == state.ActionCompleted,
 	})
 }
@@ -587,8 +588,8 @@ func (s *Server) handleDrawAction(writer http.ResponseWriter, request *http.Requ
 		Skipped         bool     `json:"skipped"`
 		RemainingBefore int      `json:"remaining_before"`
 		Message         string   `json:"message"`
-		PrizeLabel      string   `json:"prize_label,omitempty"`
-		QuotaDeltaUSD   *float64 `json:"quota_delta_usd,omitempty"`
+		PrizeLabel      string       `json:"prize_label,omitempty"`
+		QuotaDeltaUSD   *quota.Money `json:"quota_delta_usd,omitempty"`
 	}{
 		AccountID:       accountID,
 		Skipped:         outcome.Skipped,
@@ -655,7 +656,7 @@ func (s *Server) handlePurchaseAction(writer http.ResponseWriter, request *http.
 		AccountID string                  `json:"account_id"`
 		Status    string                  `json:"status"`
 		Message   string                  `json:"message"`
-		PriceUSD  *float64                `json:"price_usd,omitempty"`
+		PriceUSD  *quota.Money            `json:"price_usd,omitempty"`
 		Remaining *int                    `json:"remaining,omitempty"`
 		Activity  *service.ActivityReport `json:"activity,omitempty"`
 	}{
@@ -802,8 +803,8 @@ func (s *Server) markCheckinCompleted(store *state.Store, accountID, today strin
 		value.SideEffectStarted = true
 		value.LastError = ""
 		if status.TodayQuotaAwardedUSD != nil {
-			awardUSD := *status.TodayQuotaAwardedUSD
-			value.CheckinQuotaAwardedUSD = &awardUSD
+			award := *status.TodayQuotaAwardedUSD
+			value.CheckinQuotaAwardedUSD = &award
 		}
 		if status.TodayQuotaAwardedUSD != nil || value.CheckinQuotaAwardedUSD == nil {
 			value.Message = completedCheckinMessage(status.TodayQuotaAwardedUSD)
@@ -812,11 +813,14 @@ func (s *Server) markCheckinCompleted(store *state.Store, accountID, today strin
 	return err
 }
 
-func completedCheckinMessage(awardUSD *float64) string {
-	if awardUSD == nil {
+func completedCheckinMessage(award *quota.Money) string {
+	if award == nil {
 		return "今日已签到"
 	}
-	return fmt.Sprintf("今日已签到，获得额度：$%.2f", *awardUSD)
+	if award.State != quota.StateConfirmed {
+		return "今日已签到，获得额度待确认"
+	}
+	return fmt.Sprintf("今日已签到，获得额度：%s", award.Display)
 }
 
 func claimAdded(action state.Action) int {

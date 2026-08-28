@@ -447,7 +447,7 @@ Expected: pass for subscription, check-in, daily claim, manual draw, purchases a
 - Modify: `internal/service/runner_test.go`
 - Modify: `internal/web/server_test.go`
 
-- [ ] **Step 1: Write exact conversion tests**
+- [x] **Step 1: Write exact conversion tests**
 
 ```go
 func TestQuotaPerUnitPolicyKeepsExactRemainder(t *testing.T) {
@@ -471,7 +471,7 @@ func TestQuotaPerUnitPolicyKeepsExactRemainder(t *testing.T) {
 
 Also cover already-USD, missing unit configuration, negative remaining clamped to zero, historical snapshots and unverified JSON values.
 
-- [ ] **Step 2: Run the red quota tests**
+- [x] **Step 2: Run the red quota tests**
 
 Run:
 
@@ -481,7 +481,7 @@ go test ./internal/quota ./internal/service -run 'Quota|Money' -count=1
 
 Expected: fail because exact amount and policy packages do not exist.
 
-- [ ] **Step 3: Implement `Money` and versioned policies**
+- [x] **Step 3: Implement `Money` and versioned policies**
 
 Use `math/big.Rat` internally and a string at the JSON boundary:
 
@@ -499,15 +499,15 @@ type Money struct {
 
 Define `ParseNative(string) (NativeAmount, error)`, `NewQuotaPerUnitPolicy(string) (QuotaPerUnitPolicy, error)` and `QuotaPerUnitPolicy.Convert(NativeAmount, Provenance) Money`; the parser rejects blank, fractional and negative native amounts, and the policy constructor rejects zero or invalid units. Define `Provenance` with `Source` and `ObservedAt`, so every conversion test and persisted amount has an explicit origin. Implement `already-usd-v1` and `quota-per-unit-v1`. Save `quota_display_type`, `quota_per_unit`, `usd_exchange_rate` and custom-currency fields as snapshots; do not use exchange-rate fields until a reviewed policy explicitly authorizes them.
 
-- [ ] **Step 4: Migrate persisted and service money DTOs**
+- [x] **Step 4: Migrate persisted and service money DTOs**
 
 Replace persisted money `*float64` fields for purchase prices, check-in reward, draw delta, runtime logs and activity metrics with Money snapshots. Legacy floating-point records render as `unverified`; they are never silently reinterpreted under new rules.
 
-- [ ] **Step 5: Update safe APIs and page formatting**
+- [x] **Step 5: Update safe APIs and page formatting**
 
 Return Money objects for subscriptions, activity, check-in, draw and purchase. JavaScript only reads `display` for `confirmed` values; it never converts raw quota. Keep each source separate instead of adding balance, user usage, rewards and consumption.
 
-- [ ] **Step 6: Verify quota and action tests**
+- [x] **Step 6: Verify quota and action tests**
 
 Run:
 

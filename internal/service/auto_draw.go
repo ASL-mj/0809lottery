@@ -14,6 +14,7 @@ import (
 	"skyeapi/lottery-bot/internal/auth"
 	"skyeapi/lottery-bot/internal/config"
 	"skyeapi/lottery-bot/internal/lottery"
+	"skyeapi/lottery-bot/internal/quota"
 	"skyeapi/lottery-bot/internal/state"
 )
 
@@ -248,7 +249,7 @@ func (s *AutoDrawScheduler) executePlan(parent context.Context, key string) erro
 	return nil
 }
 
-func autoDrawExecutionResult(outcome DrawAvailableOutcome, drawErr error) (state.AutoDrawPlanStatus, string, string, *float64) {
+func autoDrawExecutionResult(outcome DrawAvailableOutcome, drawErr error) (state.AutoDrawPlanStatus, string, string, *quota.Money) {
 	if drawErr != nil {
 		if errors.Is(drawErr, auth.ErrReauthRequired) {
 			return state.AutoDrawPlanSkipped, "登录状态失效，需要重新认证，已跳过本次自动抽奖", "", nil

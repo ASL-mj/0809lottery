@@ -8,27 +8,31 @@ import (
 	"time"
 
 	"skyeapi/lottery-bot/internal/lottery"
+	"skyeapi/lottery-bot/internal/quota"
 	"skyeapi/lottery-bot/internal/state"
 )
 
+// ActivityReport emits traceable Money snapshots for every dollar figure.
+// Tier arithmetic stays on floats internally; each published value carries its
+// dashboard source and the already-usd-v1 rule.
 type ActivityReport struct {
-	AccountID             string    `json:"account_id"`
-	TodaySpendUSD         float64   `json:"today_spend_usd"`
-	SpendTierReached      int       `json:"spend_tier_reached"`
-	SpendTierTotal        int       `json:"spend_tier_total"`
-	NextSpendThresholdUSD *float64  `json:"next_spend_threshold_usd,omitempty"`
-	NextSpendRemainingUSD *float64  `json:"next_spend_remaining_usd,omitempty"`
-	SpendBonusDraws       int       `json:"spend_bonus_draws"`
-	LuckyPoints           int       `json:"lucky_points"`
-	LuckyMaxPoints        int       `json:"lucky_max_points"`
-	DrawPurchaseCostUSD   *float64  `json:"draw_purchase_cost_usd,omitempty"`
-	PurchasedToday        int       `json:"purchased_today"`
-	PurchasePending       int       `json:"purchase_pending"`
-	PurchaseUnknown       int       `json:"purchase_unknown"`
-	PassUnlockCostUSD     *float64  `json:"pass_unlock_cost_usd,omitempty"`
-	PassUnlocked          bool      `json:"pass_unlocked"`
-	DayKey                string    `json:"day_key"`
-	QueriedAt             time.Time `json:"queried_at"`
+	AccountID             string       `json:"account_id"`
+	TodaySpendUSD         quota.Money  `json:"today_spend_usd"`
+	SpendTierReached      int          `json:"spend_tier_reached"`
+	SpendTierTotal        int          `json:"spend_tier_total"`
+	NextSpendThresholdUSD *quota.Money `json:"next_spend_threshold_usd,omitempty"`
+	NextSpendRemainingUSD *quota.Money `json:"next_spend_remaining_usd,omitempty"`
+	SpendBonusDraws       int          `json:"spend_bonus_draws"`
+	LuckyPoints           int          `json:"lucky_points"`
+	LuckyMaxPoints        int          `json:"lucky_max_points"`
+	DrawPurchaseCostUSD   *quota.Money `json:"draw_purchase_cost_usd,omitempty"`
+	PurchasedToday        int          `json:"purchased_today"`
+	PurchasePending       int          `json:"purchase_pending"`
+	PurchaseUnknown       int          `json:"purchase_unknown"`
+	PassUnlockCostUSD     *quota.Money `json:"pass_unlock_cost_usd,omitempty"`
+	PassUnlocked          bool         `json:"pass_unlocked"`
+	DayKey                string       `json:"day_key"`
+	QueriedAt             time.Time    `json:"queried_at"`
 }
 
 type spendTier struct {
@@ -58,15 +62,17 @@ func buildActivityReport(accountID string, dashboard lottery.Dashboard, queriedA
 		QueriedAt: queriedAt,
 		DayKey:    strings.TrimSpace(today),
 	}
+	todaySpend := 0.0
 	if dashboard.Eligibility.TodaySpend != nil {
-		report.TodaySpendUSD = *dashboard.Eligibility.TodaySpend
+		todaySpend = *dashboard.Eligibility.TodaySpend
 	}
+	report.TodaySpendUSD = USDMoney(todaySpend, "dashboard.eligibility.today_spend", queriedAt)
 	tiers := parseSpendTiers(dashboard.Rules.SpendTiers)
 	report.SpendTierTotal = len(tiers)
 	for _, tier := range tiers {
-		if report.TodaySpendUSD+1e-9 < tier.ThresholdUSD {
-			threshold := tier.ThresholdUSD
-			remaining := threshold - report.TodaySpendUSD
+		if todaySpend+1e-9 < tier.ThresholdUSD {
+			threshold := USDMoney(tier.ThresholdUSD, "dashboard.spend_tiers.threshold", queriedAt)
+			remaining := USDMoney(tier.ThresholdUSD-todaySpend, "dashboard.spend_tiers.remaining", queriedAt)
 			report.NextSpendThresholdUSD = &threshold
 			report.NextSpendRemainingUSD = &remaining
 			break
@@ -81,7 +87,8 @@ func buildActivityReport(accountID string, dashboard lottery.Dashboard, queriedA
 	report.LuckyPoints = firstMapInt(dashboard.Lucky, "points", "currentPoints")
 	report.LuckyMaxPoints = firstMapInt(dashboard.Lucky, "maxPoints", "max")
 	if cost, ok := firstMapFloat(dashboard.Purchase, "cost", "unitCost", "price"); ok {
-		report.DrawPurchaseCostUSD = &cost
+		costMoney := USDMoney(cost, "dashboard.purchase.cost", queriedAt)
+		report.DrawPurchaseCostUSD = &costMoney
 	}
 	report.PurchasedToday = firstMapInt(dashboard.Purchase, "purchasedToday", "todayPurchased")
 	report.PurchasePending = firstMapInt(dashboard.Purchase, "pendingCount")
@@ -89,8 +96,8 @@ func buildActivityReport(accountID string, dashboard lottery.Dashboard, queriedA
 
 	limit, _ := dashboard.EffectiveDrawLimit()
 	if cost := limit.UnlockCost; cost != nil {
-		value := float64(*cost)
-		report.PassUnlockCostUSD = &value
+		passCost := USDMoney(float64(*cost), "dashboard.draw_limit.unlock_cost", queriedAt)
+		report.PassUnlockCostUSD = &passCost
 	}
 	report.PassUnlocked = boolOrDefault(limit.Unlocked, false)
 	if dayKey := strings.TrimSpace(limit.DayKey); dayKey != "" {

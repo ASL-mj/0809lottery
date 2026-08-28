@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"skyeapi/lottery-bot/internal/quota"
 	"skyeapi/lottery-bot/internal/state"
 )
 
@@ -182,22 +183,24 @@ type CheckinResult struct {
 }
 
 type UserUsage struct {
-	Quota                    int64    `json:"quota"`
-	UsedQuota                int64    `json:"used_quota"`
-	RequestCount             int64    `json:"request_count"`
-	QuotaUSD                 *float64 `json:"quota_usd,omitempty"`
-	UsedQuotaUSD             *float64 `json:"used_quota_usd,omitempty"`
-	QuotaConversionAvailable bool     `json:"quota_conversion_available"`
-	QuotaConversionError     string   `json:"quota_conversion_error,omitempty"`
+	Quota                    int64        `json:"quota"`
+	UsedQuota                int64        `json:"used_quota"`
+	RequestCount             int64        `json:"request_count"`
+	QuotaUSD                 *quota.Money `json:"-"`
+	UsedQuotaUSD             *quota.Money `json:"-"`
+	QuotaConversionAvailable bool         `json:"-"`
+	QuotaConversionError     string       `json:"-"`
 }
 
+// MarshalJSON keeps native quota values out of any encoded output and emits
+// traceable Money snapshots only.
 func (usage UserUsage) MarshalJSON() ([]byte, error) {
 	type display struct {
-		RequestCount             int64    `json:"request_count"`
-		QuotaUSD                 *float64 `json:"quota_usd,omitempty"`
-		UsedQuotaUSD             *float64 `json:"used_quota_usd,omitempty"`
-		QuotaConversionAvailable bool     `json:"quota_conversion_available"`
-		QuotaConversionError     string   `json:"quota_conversion_error,omitempty"`
+		RequestCount             int64        `json:"request_count"`
+		QuotaUSD                 *quota.Money `json:"quota_usd,omitempty"`
+		UsedQuotaUSD             *quota.Money `json:"used_quota_usd,omitempty"`
+		QuotaConversionAvailable bool         `json:"quota_conversion_available"`
+		QuotaConversionError     string       `json:"quota_conversion_error,omitempty"`
 	}
 	return json.Marshal(display{
 		RequestCount:             usage.RequestCount,

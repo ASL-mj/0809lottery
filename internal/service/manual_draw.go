@@ -8,6 +8,7 @@ import (
 
 	"skyeapi/lottery-bot/internal/auth"
 	"skyeapi/lottery-bot/internal/lottery"
+	"skyeapi/lottery-bot/internal/quota"
 	"skyeapi/lottery-bot/internal/state"
 )
 
@@ -15,7 +16,7 @@ type DrawAvailableOutcome struct {
 	Skipped         bool
 	RemainingBefore int
 	Result          *lottery.DrawResult `json:"-"`
-	QuotaDeltaUSD   *float64
+	QuotaDeltaUSD   *quota.Money
 	Message         string
 }
 
@@ -84,11 +85,11 @@ func (r *Runner) DrawAvailable(ctx context.Context, accountID, idempotencyKey st
 			return DrawAvailableOutcome{}, err
 		}
 	}
-	quotaDeltaUSD := r.quotaDeltaUSDForDraw(ctx, client, accountID, result)
+	quotaDelta := r.quotaDeltaMoneyForDraw(ctx, client, accountID, result)
 	return DrawAvailableOutcome{
 		RemainingBefore: remaining,
 		Result:          &result,
-		QuotaDeltaUSD:   quotaDeltaUSD,
+		QuotaDeltaUSD:   quotaDelta,
 		Message:         "手动抽奖成功",
 	}, nil
 }
@@ -99,36 +100,38 @@ func (r *Runner) DrawAvailableScheduled(ctx context.Context, accountID, idempote
 	return r.DrawAvailable(ctx, accountID, idempotencyKey, auth.ScheduledAutomation)
 }
 
-// quotaDeltaUSDForDraw resolves the dollar value of a draw reward on a
+// quotaDeltaMoneyForDraw resolves the dollar value of a draw reward on a
 // best-effort basis; a failing parent session never invalidates the draw.
-func (r *Runner) quotaDeltaUSDForDraw(ctx context.Context, client WebsiteClient, accountID string, result lottery.DrawResult) *float64 {
+// Without a verified conversion rule the snapshot is explicitly unavailable.
+func (r *Runner) quotaDeltaMoneyForDraw(ctx context.Context, client WebsiteClient, accountID string, result lottery.DrawResult) *quota.Money {
 	if result.Effect.QuotaDelta == 0 {
 		return nil
 	}
+	observedAt := r.now().UTC()
 	sess, err := r.acquire(ctx, accountID, auth.ReadOnly, auth.SessionParent)
 	if err != nil {
-		return nil
+		delta := quota.UnavailableUSD("draw.effect.quota_delta", observedAt)
+		return &delta
 	}
 	settings, statusErr := client.Status(ctx, sess.token)
 	if statusErr != nil && subscriptionAuthError(statusErr) {
 		renewed, renewErr := r.renewParent(ctx, accountID, sess.token)
 		if renewErr != nil {
-			return nil
+			delta := quota.UnavailableUSD("draw.effect.quota_delta", observedAt)
+			return &delta
 		}
 		retryClient, clientErr := r.clientFor(renewed)
 		if clientErr != nil {
-			return nil
+			delta := quota.UnavailableUSD("draw.effect.quota_delta", observedAt)
+			return &delta
 		}
 		settings, statusErr = retryClient.Status(ctx, renewed.token)
-		sess = renewed
 		client = retryClient
 	}
 	if statusErr != nil {
-		return nil
+		delta := quota.UnavailableUSD("draw.effect.quota_delta", observedAt)
+		return &delta
 	}
-	quotaDeltaUSD, ok := QuotaAmountUSD(result.Effect.QuotaDelta, settings)
-	if !ok {
-		return nil
-	}
-	return quotaDeltaUSD
+	delta := QuotaMoney(result.Effect.QuotaDelta, settings, "draw.effect.quota_delta", observedAt)
+	return &delta
 }

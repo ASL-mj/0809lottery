@@ -9,24 +9,25 @@ import (
 
 	"skyeapi/lottery-bot/internal/auth"
 	"skyeapi/lottery-bot/internal/lottery"
+	"skyeapi/lottery-bot/internal/quota"
 )
 
 type SubscriptionItem struct {
-	ID                 int       `json:"id"`
-	PlanTitle          string    `json:"plan_title"`
-	TotalAmount        int64     `json:"-"`
-	RemainingAmount    int64     `json:"-"`
-	TotalAmountUSD     *float64  `json:"total_usd,omitempty"`
-	RemainingAmountUSD *float64  `json:"remaining_usd,omitempty"`
-	EndTime            time.Time `json:"end_time"`
-	Unlimited          bool      `json:"unlimited"`
+	ID                 int          `json:"id"`
+	PlanTitle          string       `json:"plan_title"`
+	TotalAmount        int64        `json:"-"`
+	RemainingAmount    int64        `json:"-"`
+	TotalAmountUSD     *quota.Money `json:"total_usd,omitempty"`
+	RemainingAmountUSD *quota.Money `json:"remaining_usd,omitempty"`
+	EndTime            time.Time    `json:"end_time"`
+	Unlimited          bool         `json:"unlimited"`
 }
 
 type AccountSubscriptionReport struct {
 	Account           string             `json:"account"`
 	Subscriptions     []SubscriptionItem `json:"subscriptions"`
 	RemainingTotal    int64              `json:"-"`
-	RemainingTotalUSD *float64           `json:"remaining_total_usd,omitempty"`
+	RemainingTotalUSD *quota.Money       `json:"remaining_total_usd,omitempty"`
 	HasUnlimited      bool               `json:"has_unlimited"`
 	QueryError        string             `json:"query_error"`
 }
@@ -39,8 +40,8 @@ type SubscriptionReport struct {
 	ActiveSubscriptionCount    int                         `json:"active_subscription_count"`
 	FiniteTotalAmount          int64                       `json:"-"`
 	FiniteRemainingAmount      int64                       `json:"-"`
-	FiniteTotalAmountUSD       *float64                    `json:"finite_total_usd,omitempty"`
-	FiniteRemainingAmountUSD   *float64                    `json:"finite_remaining_usd,omitempty"`
+	FiniteTotalAmountUSD       *quota.Money                `json:"finite_total_usd,omitempty"`
+	FiniteRemainingAmountUSD   *quota.Money                `json:"finite_remaining_usd,omitempty"`
 	UnlimitedSubscriptionCount int                         `json:"unlimited_subscription_count"`
 }
 
@@ -77,15 +78,16 @@ func (r *Runner) QuerySubscriptions(ctx context.Context, accountID string) (Subs
 		}
 	}
 	if report.HasDisplaySettings {
-		report.FiniteTotalAmountUSD, _ = QuotaUSD(report.FiniteTotalAmount, report.DisplaySettings)
-		report.FiniteRemainingAmountUSD, _ = QuotaUSD(report.FiniteRemainingAmount, report.DisplaySettings)
+		observedAt := r.now().UTC()
+		report.FiniteTotalAmountUSD = quotaMoneyPointerOrUnavailable(report.FiniteTotalAmount, report.DisplaySettings, "subscription.finite_total", observedAt)
+		report.FiniteRemainingAmountUSD = quotaMoneyPointerOrUnavailable(report.FiniteRemainingAmount, report.DisplaySettings, "subscription.finite_remaining", observedAt)
 		for index := range report.Accounts {
 			account := &report.Accounts[index]
-			account.RemainingTotalUSD, _ = QuotaUSD(account.RemainingTotal, report.DisplaySettings)
+			account.RemainingTotalUSD = quotaMoneyPointerOrUnavailable(account.RemainingTotal, report.DisplaySettings, "subscription.remaining_total", observedAt)
 			for subscriptionIndex := range account.Subscriptions {
 				subscription := &account.Subscriptions[subscriptionIndex]
-				subscription.TotalAmountUSD, _ = QuotaUSD(subscription.TotalAmount, report.DisplaySettings)
-				subscription.RemainingAmountUSD, _ = QuotaUSD(subscription.RemainingAmount, report.DisplaySettings)
+				subscription.TotalAmountUSD = quotaMoneyPointerOrUnavailable(subscription.TotalAmount, report.DisplaySettings, "subscription.amount_total", observedAt)
+				subscription.RemainingAmountUSD = quotaMoneyPointerOrUnavailable(subscription.RemainingAmount, report.DisplaySettings, "subscription.amount_remaining", observedAt)
 			}
 		}
 	}

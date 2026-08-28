@@ -12,6 +12,7 @@ import (
 	"skyeapi/lottery-bot/internal/auth"
 	"skyeapi/lottery-bot/internal/config"
 	"skyeapi/lottery-bot/internal/lottery"
+	"skyeapi/lottery-bot/internal/quota"
 	"skyeapi/lottery-bot/internal/state"
 )
 
@@ -67,7 +68,7 @@ type ActionOutcome struct {
 
 type CheckinStatusReport struct {
 	CheckedInToday       bool
-	TodayQuotaAwardedUSD *float64
+	TodayQuotaAwardedUSD *quota.Money
 }
 
 func NewRunner(cfg config.Config, store *state.Store, repo account.Repository, broker *auth.Broker) *Runner {
@@ -201,8 +202,8 @@ func (r *Runner) Checkin(ctx context.Context, accountID string) (ActionOutcome, 
 		case !eligibility.CanCheckin:
 			message := "今日活跃度不足，暂时无法换算签到所需额度"
 			if settings, settingsErr := client.Status(ctx, sess.token); settingsErr == nil {
-				if remainingUSD, ok := QuotaAmountUSD(eligibility.Remaining, settings); ok {
-					message = fmt.Sprintf("今日活跃度不足，距离签到还需消耗 $%.2f", *remainingUSD)
+				if remaining := QuotaMoney(float64(eligibility.Remaining), settings, "checkin.required_spend", r.now().UTC()); remaining.State == quota.StateConfirmed {
+					message = fmt.Sprintf("今日活跃度不足，距离签到还需消耗 %s", remaining.Display)
 				}
 			}
 			return r.recordActionError(action, errors.New(message), false, true)
@@ -296,9 +297,10 @@ func (r *Runner) reconcileFailedCheckin(ctx context.Context, accountID string, a
 			if status.TodayQuotaAwarded != nil {
 				quotaAwarded := *status.TodayQuotaAwarded
 				value.CheckinQuotaAwarded = &quotaAwarded
-				if rewardUSD, ok := QuotaAmountUSD(*status.TodayQuotaAwarded, settings); ok {
-					value.CheckinQuotaAwardedUSD = rewardUSD
-					value.Message = fmt.Sprintf("今日已签到，获得额度：$%.2f", *rewardUSD)
+				reward := QuotaMoney(*status.TodayQuotaAwarded, settings, "checkin.quota_awarded", r.now().UTC())
+				if reward.State == quota.StateConfirmed {
+					value.CheckinQuotaAwardedUSD = &reward
+					value.Message = fmt.Sprintf("今日已签到，获得额度：%s", reward.Display)
 				}
 			}
 		})
@@ -344,7 +346,10 @@ func (r *Runner) CheckinStatus(ctx context.Context, accountID string) (CheckinSt
 	}
 	report := CheckinStatusReport{CheckedInToday: status.CheckedInToday}
 	if status.TodayQuotaAwarded != nil {
-		report.TodayQuotaAwardedUSD, _ = QuotaAmountUSD(*status.TodayQuotaAwarded, settings)
+		reward := QuotaMoney(*status.TodayQuotaAwarded, settings, "checkin.quota_awarded", r.now().UTC())
+		if reward.State == quota.StateConfirmed {
+			report.TodayQuotaAwardedUSD = &reward
+		}
 	}
 	return report, nil
 }

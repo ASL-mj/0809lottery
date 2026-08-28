@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"skyeapi/lottery-bot/internal/lottery"
+	"skyeapi/lottery-bot/internal/quota"
 	"skyeapi/lottery-bot/internal/state"
 )
 
@@ -13,7 +14,7 @@ type PurchaseOutcome struct {
 	AccountID       string          `json:"account_id"`
 	Status          string          `json:"status"`
 	Message         string          `json:"message"`
-	PriceUSD        *float64        `json:"price_usd,omitempty"`
+	PriceUSD        *quota.Money    `json:"price_usd,omitempty"`
 	Remaining       *int            `json:"remaining,omitempty"`
 	Activity        *ActivityReport `json:"activity,omitempty"`
 	Action          state.Action    `json:"-"`
@@ -68,12 +69,12 @@ func (r *Runner) PurchaseDraw(ctx context.Context, accountID string) (PurchaseOu
 	if err != nil {
 		return r.recordPurchasePreflightError(accountID, action, nil, err)
 	}
-	price := dashboardPurchasePrice(beforeDashboard)
+	price := r.dashboardPurchasePrice(beforeDashboard)
 	beforeRemaining := dashboardRemainingPointer(beforeDashboard)
 	beforePurchasedRemaining := dashboardPurchasedRemainingPointer(beforeDashboard)
 	beforeToday := dashboardPurchasedToday(beforeDashboard)
 	action, err = r.finishAction(action, func(value *state.Action) {
-		value.PriceUSD = copyFloatPointer(price)
+		value.PriceUSD = copyMoneyPointer(price)
 		value.PurchaseBeforeToday = intPointer(beforeToday)
 		value.PurchaseBeforeRemaining = copyIntPointer(beforePurchasedRemaining)
 		value.PassBeforeUnlocked = nil
@@ -152,11 +153,11 @@ func (r *Runner) UnlockDailyPass(ctx context.Context, accountID string) (Purchas
 	if err != nil {
 		return r.recordPurchasePreflightError(accountID, action, nil, err)
 	}
-	price := dashboardPassPrice(beforeDashboard)
+	price := r.dashboardPassPrice(beforeDashboard)
 	beforeUnlocked := dashboardPassUnlockedForToday(beforeDashboard, r.today())
 	beforeRemaining := dashboardRemainingPointer(beforeDashboard)
 	action, err = r.finishAction(action, func(value *state.Action) {
-		value.PriceUSD = copyFloatPointer(price)
+		value.PriceUSD = copyMoneyPointer(price)
 		value.PassBeforeUnlocked = boolPointerValue(beforeUnlocked)
 		value.PurchaseBeforeToday = nil
 		value.PurchaseBeforeRemaining = nil
@@ -224,7 +225,7 @@ func (r *Runner) reconcilePurchaseDraw(ctx context.Context, accountID string, ac
 		return PurchaseOutcome{}, err
 	}
 	if purchaseDashboardProvesSuccess(action, afterDashboard) {
-		return r.finishPurchaseDrawFromDashboard(accountID, action, copyFloatPointer(action.PriceUSD), afterDashboard, "", "购买抽奖次数已对账完成")
+		return r.finishPurchaseDrawFromDashboard(accountID, action, copyMoneyPointer(action.PriceUSD), afterDashboard, "", "购买抽奖次数已对账完成")
 	}
 	if action.Status == state.ActionPending {
 		updated, updateErr := r.finishAction(action, func(value *state.Action) {
@@ -260,7 +261,7 @@ func (r *Runner) reconcileUnlockDailyPass(ctx context.Context, accountID string,
 		return PurchaseOutcome{}, err
 	}
 	if dashboardPassUnlockedForToday(afterDashboard, r.today()) {
-		return r.finishUnlockFromDashboard(accountID, action, copyFloatPointer(action.PriceUSD), afterDashboard, "", "今日通行证已对账完成")
+		return r.finishUnlockFromDashboard(accountID, action, copyMoneyPointer(action.PriceUSD), afterDashboard, "", "今日通行证已对账完成")
 	}
 	if action.Status == state.ActionPending {
 		updated, updateErr := r.finishAction(action, func(value *state.Action) {
@@ -286,7 +287,7 @@ func (r *Runner) reconcileUnlockDailyPass(ctx context.Context, accountID string,
 	return purchaseOutcomeFromAction(accountID, updated, dashboardRemainingPointer(afterDashboard), nil, true), nil
 }
 
-func (r *Runner) reconcilePurchaseAfterPostError(ctx context.Context, client WebsiteClient, accountID string, sess session, action state.Action, price *float64, cause error) (PurchaseOutcome, error) {
+func (r *Runner) reconcilePurchaseAfterPostError(ctx context.Context, client WebsiteClient, accountID string, sess session, action state.Action, price *quota.Money, cause error) (PurchaseOutcome, error) {
 	sess, afterDashboard, err := r.dashboardWithRecovery(ctx, client, accountID, sess)
 	if err == nil {
 		if purchaseDashboardProvesSuccess(action, afterDashboard) {
@@ -297,7 +298,7 @@ func (r *Runner) reconcilePurchaseAfterPostError(ctx context.Context, client Web
 	return r.finishPurchaseWithoutProof(accountID, action, price, nil, "", safeError(cause))
 }
 
-func (r *Runner) reconcileUnlockAfterPostError(ctx context.Context, client WebsiteClient, accountID string, sess session, action state.Action, price *float64, cause error) (PurchaseOutcome, error) {
+func (r *Runner) reconcileUnlockAfterPostError(ctx context.Context, client WebsiteClient, accountID string, sess session, action state.Action, price *quota.Money, cause error) (PurchaseOutcome, error) {
 	sess, afterDashboard, err := r.dashboardWithRecovery(ctx, client, accountID, sess)
 	if err == nil {
 		if dashboardPassUnlockedForToday(afterDashboard, r.today()) {
@@ -308,7 +309,7 @@ func (r *Runner) reconcileUnlockAfterPostError(ctx context.Context, client Websi
 	return r.finishPurchaseWithoutProof(accountID, action, price, nil, "", safeError(cause))
 }
 
-func (r *Runner) finishPurchaseDrawFromDashboard(accountID string, action state.Action, price *float64, afterDashboard lottery.Dashboard, operationStatus, fallbackMessage string) (PurchaseOutcome, error) {
+func (r *Runner) finishPurchaseDrawFromDashboard(accountID string, action state.Action, price *quota.Money, afterDashboard lottery.Dashboard, operationStatus, fallbackMessage string) (PurchaseOutcome, error) {
 	if purchaseDashboardProvesSuccess(action, afterDashboard) {
 		report, err := r.storeActivitySnapshot(accountID, afterDashboard)
 		if err != nil {
@@ -320,7 +321,7 @@ func (r *Runner) finishPurchaseDrawFromDashboard(accountID string, action state.
 			value.Retryable = false
 			value.Message = firstNonEmpty(fallbackMessage, "购买抽奖次数成功")
 			value.LastError = ""
-			value.PriceUSD = copyFloatPointer(price)
+			value.PriceUSD = copyMoneyPointer(price)
 		})
 		if err != nil {
 			return PurchaseOutcome{}, err
@@ -330,7 +331,7 @@ func (r *Runner) finishPurchaseDrawFromDashboard(accountID string, action state.
 	return r.finishPurchaseWithoutProof(accountID, action, price, dashboardRemainingPointer(afterDashboard), operationStatus, fallbackMessage)
 }
 
-func (r *Runner) finishUnlockFromDashboard(accountID string, action state.Action, price *float64, afterDashboard lottery.Dashboard, operationStatus, fallbackMessage string) (PurchaseOutcome, error) {
+func (r *Runner) finishUnlockFromDashboard(accountID string, action state.Action, price *quota.Money, afterDashboard lottery.Dashboard, operationStatus, fallbackMessage string) (PurchaseOutcome, error) {
 	if dashboardPassUnlockedForToday(afterDashboard, r.today()) {
 		report, err := r.storeActivitySnapshot(accountID, afterDashboard)
 		if err != nil {
@@ -342,7 +343,7 @@ func (r *Runner) finishUnlockFromDashboard(accountID string, action state.Action
 			value.Retryable = false
 			value.Message = firstNonEmpty(fallbackMessage, "今日通行证解锁成功")
 			value.LastError = ""
-			value.PriceUSD = copyFloatPointer(price)
+			value.PriceUSD = copyMoneyPointer(price)
 		})
 		if err != nil {
 			return PurchaseOutcome{}, err
@@ -352,9 +353,9 @@ func (r *Runner) finishUnlockFromDashboard(accountID string, action state.Action
 	return r.finishPurchaseWithoutProof(accountID, action, price, dashboardRemainingPointer(afterDashboard), operationStatus, fallbackMessage)
 }
 
-func (r *Runner) finishPurchaseWithoutProof(accountID string, action state.Action, price *float64, remaining *int, operationStatus, fallbackMessage string) (PurchaseOutcome, error) {
+func (r *Runner) finishPurchaseWithoutProof(accountID string, action state.Action, price *quota.Money, remaining *int, operationStatus, fallbackMessage string) (PurchaseOutcome, error) {
 	updated, err := r.finishAction(action, func(value *state.Action) {
-		value.PriceUSD = copyFloatPointer(price)
+		value.PriceUSD = copyMoneyPointer(price)
 		value.Retryable = false
 		if isOperationPendingStatus(operationStatus) {
 			value.Status = state.ActionPending
@@ -433,7 +434,7 @@ func purchaseOutcomeFromAction(accountID string, action state.Action, remaining 
 		AccountID:       accountID,
 		Status:          string(action.Status),
 		Message:         action.Message,
-		PriceUSD:        copyFloatPointer(action.PriceUSD),
+		PriceUSD:        copyMoneyPointer(action.PriceUSD),
 		Remaining:       copyIntPointer(remaining),
 		Activity:        copyActivityReport(activity),
 		Action:          action,
@@ -452,20 +453,31 @@ func purchaseDashboardProvesSuccess(action state.Action, dashboard lottery.Dashb
 	return ok && afterPurchasedRemaining > *action.PurchaseBeforeRemaining
 }
 
-func dashboardPurchasePrice(dashboard lottery.Dashboard) *float64 {
+// dashboardPurchasePrice snapshots the live purchase price under the
+// already-usd-v1 rule; prices are platform-reported USD values.
+func (r *Runner) dashboardPurchasePrice(dashboard lottery.Dashboard) *quota.Money {
 	if cost, ok := firstMapFloat(dashboard.Purchase, "cost", "unitCost", "price"); ok {
-		return &cost
+		price := USDMoney(cost, "dashboard.purchase.cost", r.now().UTC())
+		return &price
 	}
 	return nil
 }
 
-func dashboardPassPrice(dashboard lottery.Dashboard) *float64 {
+func (r *Runner) dashboardPassPrice(dashboard lottery.Dashboard) *quota.Money {
 	limit, _ := dashboard.EffectiveDrawLimit()
 	if limit.UnlockCost == nil {
 		return nil
 	}
-	price := float64(*limit.UnlockCost)
+	price := USDMoney(float64(*limit.UnlockCost), "dashboard.draw_limit.unlock_cost", r.now().UTC())
 	return &price
+}
+
+func copyMoneyPointer(value *quota.Money) *quota.Money {
+	if value == nil {
+		return nil
+	}
+	copied := *value
+	return &copied
 }
 
 func dashboardPurchasedToday(dashboard lottery.Dashboard) int {
@@ -497,14 +509,6 @@ func dashboardPassUnlockedForToday(dashboard lottery.Dashboard, today string) bo
 	}
 	dayKey := strings.TrimSpace(limit.DayKey)
 	return dayKey != "" && dayKey == strings.TrimSpace(today)
-}
-
-func copyFloatPointer(pointer *float64) *float64 {
-	if pointer == nil {
-		return nil
-	}
-	value := *pointer
-	return &value
 }
 
 func copyActivityReport(report *ActivityReport) *ActivityReport {
