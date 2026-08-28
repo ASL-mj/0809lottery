@@ -296,51 +296,69 @@ func (s *Server) handleAutoDrawStatus(writer http.ResponseWriter, request *http.
 		writeStoreError(writer, err)
 		return
 	}
-	type windowView struct {
-		WindowID      string     `json:"window_id"`
-		PlannedAt     *time.Time `json:"planned_at,omitempty"`
-		ExecutedAt    *time.Time `json:"executed_at,omitempty"`
-		Status        string      `json:"status"`
-		Message       string      `json:"message,omitempty"`
-		PrizeLabel    string      `json:"prize_label,omitempty"`
+	type planView struct {
+		ScheduleID    string       `json:"schedule_id"`
+		Label         string       `json:"label"`
+		PlannedAt     *time.Time   `json:"planned_at,omitempty"`
+		ExecutedAt    *time.Time   `json:"executed_at,omitempty"`
+		Status        string       `json:"status"`
+		Message       string       `json:"message,omitempty"`
+		PrizeLabel    string       `json:"prize_label,omitempty"`
 		QuotaDeltaUSD *quota.Money `json:"quota_delta_usd,omitempty"`
 	}
+	type scheduleView struct {
+		ID    string `json:"id"`
+		Kind  string `json:"kind"`
+		Start string `json:"start"`
+		End   string `json:"end,omitempty"`
+		Label string `json:"label"`
+	}
 	type accountView struct {
-		AccountID string       `json:"account_id"`
-		Windows   []windowView `json:"windows"`
+		AccountID string         `json:"account_id"`
+		Schedules []scheduleView `json:"schedules"`
+		Plans     []planView     `json:"plans"`
 	}
 
 	today := time.Now().In(shanghaiLocation).Format("2006-01-02")
-	plansByAccountWindow := make(map[string]state.AutoDrawPlan)
+	plansByAccount := make(map[string][]state.AutoDrawPlan)
 	for _, plan := range store.AutoDrawPlans(today) {
-		plansByAccountWindow[plan.AccountID+"\x00"+plan.WindowID] = plan
+		plansByAccount[plan.AccountID] = append(plansByAccount[plan.AccountID], plan)
 	}
 	records, err := store.AccountRegistry().List()
 	if err != nil {
 		writeStoreError(writer, err)
 		return
 	}
-	ids := make([]string, 0, len(records))
+	accounts := make([]accountView, 0, len(records))
 	for _, record := range records {
-		ids = append(ids, record.ID)
-	}
-	autoDrawWindows := service.AutoDrawWindows()
-	accounts := make([]accountView, 0, len(ids))
-	for _, accountID := range ids {
-		windows := make([]windowView, 0, len(autoDrawWindows))
-		for _, window := range autoDrawWindows {
-			view := windowView{WindowID: window.ID, Status: string(state.AutoDrawPlanPending)}
-			if plan, ok := plansByAccountWindow[accountID+"\x00"+window.ID]; ok {
-				view.Status = string(plan.Status)
-				view.PlannedAt = timePointer(plan.PlannedAt)
-				view.ExecutedAt = timePointer(plan.ExecutedAt)
-				view.Message = publicRuntimeLogText(plan.Message)
-				view.PrizeLabel = publicRuntimeLogText(plan.PrizeLabel)
-				view.QuotaDeltaUSD = plan.QuotaDeltaUSD
-			}
-			windows = append(windows, view)
+		schedules := store.DrawSchedules(record.ID)
+		scheduleViews := make([]scheduleView, 0, len(schedules))
+		labels := make(map[string]string, len(schedules))
+		for _, entry := range schedules {
+			label := service.ScheduleLabel(entry)
+			labels[entry.ID] = label
+			scheduleViews = append(scheduleViews, scheduleView{
+				ID: entry.ID, Kind: entry.Kind, Start: entry.Start, End: entry.End, Label: label,
+			})
 		}
-		accounts = append(accounts, accountView{AccountID: accountID, Windows: windows})
+		plans := make([]planView, 0, len(plansByAccount[record.ID]))
+		for _, plan := range plansByAccount[record.ID] {
+			plans = append(plans, planView{
+				ScheduleID:    plan.WindowID,
+				Label:         labels[plan.WindowID],
+				PlannedAt:     timePointer(plan.PlannedAt),
+				ExecutedAt:    timePointer(plan.ExecutedAt),
+				Status:        string(plan.Status),
+				Message:       publicRuntimeLogText(plan.Message),
+				PrizeLabel:    publicRuntimeLogText(plan.PrizeLabel),
+				QuotaDeltaUSD: plan.QuotaDeltaUSD,
+			})
+		}
+		accounts = append(accounts, accountView{
+			AccountID: record.ID,
+			Schedules: scheduleViews,
+			Plans:     plans,
+		})
 	}
 	writeJSON(writer, http.StatusOK, map[string]interface{}{"date": today, "accounts": accounts})
 }

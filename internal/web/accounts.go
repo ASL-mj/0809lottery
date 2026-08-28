@@ -146,6 +146,9 @@ func (s *Server) handleAccountList(writer http.ResponseWriter, request *http.Req
 				item["activity_snapshot"] = map[string]interface{}{"data": json.RawMessage(snapshot.Data), "queried_at": snapshot.QueriedAt}
 			}
 		}
+		if snapshot, ok := store.Snapshot(record.ID, "usage"); ok {
+			item["usage_snapshot"] = map[string]interface{}{"data": json.RawMessage(snapshot.Data), "queried_at": snapshot.QueriedAt}
+		}
 		accounts = append(accounts, item)
 	}
 	writeJSON(writer, http.StatusOK, map[string]interface{}{"accounts": accounts})
@@ -252,13 +255,18 @@ func (s *Server) handleAccountActions(writer http.ResponseWriter, request *http.
 	}
 	action := parts[3]
 	switch action {
-	case "checkin", "claim", "draw", "activity", "purchase-draw", "unlock-pass", "reauthenticate", "validate":
+	case "checkin", "claim", "draw", "activity", "purchase-draw", "unlock-pass", "reauthenticate", "validate", "balance":
 		if request.Method != http.MethodPost {
 			writeError(writer, http.StatusMethodNotAllowed, "请求方法不支持")
 			return
 		}
 	case "session-preview":
 		if request.Method != http.MethodGet {
+			writeError(writer, http.StatusMethodNotAllowed, "请求方法不支持")
+			return
+		}
+	case "draw-schedule":
+		if request.Method != http.MethodGet && request.Method != http.MethodPut {
 			writeError(writer, http.StatusMethodNotAllowed, "请求方法不支持")
 			return
 		}
@@ -292,12 +300,20 @@ func (s *Server) handleAccountActions(writer http.ResponseWriter, request *http.
 		s.handleAccountValidate(writer, request, record)
 	case "session-preview":
 		s.handleSessionPreview(writer, request, record)
+	case "draw-schedule":
+		if request.Method == http.MethodGet {
+			s.handleDrawScheduleGet(writer, request, record)
+		} else {
+			s.handleDrawSchedulePut(writer, request, record)
+		}
+	case "balance":
+		s.handleBalanceAction(writer, request, accountID)
 	}
 }
 
 func isBusinessAction(action string) bool {
 	switch action {
-	case "checkin", "claim", "draw", "activity", "purchase-draw", "unlock-pass":
+	case "checkin", "claim", "draw", "activity", "purchase-draw", "unlock-pass", "balance":
 		return true
 	}
 	return false
@@ -572,6 +588,75 @@ func (s *Server) handleSessionPreview(writer http.ResponseWriter, request *http.
 	writeJSON(writer, http.StatusOK, map[string]interface{}{
 		"account_id": record.ID,
 		"preview":    preview,
+	})
+}
+
+type drawScheduleRequest struct {
+	Schedules []state.AutoDrawSchedule `json:"schedules"`
+}
+
+func (s *Server) handleDrawScheduleGet(writer http.ResponseWriter, request *http.Request, record account.Record) {
+	store, err := s.sharedStore()
+	if err != nil {
+		writeStoreError(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]interface{}{
+		"account_id": record.ID,
+		"schedules":  store.DrawSchedules(record.ID),
+	})
+}
+
+// handleDrawSchedulePut replaces the account's auto-draw schedule list.
+func (s *Server) handleDrawSchedulePut(writer http.ResponseWriter, request *http.Request, record account.Record) {
+	var input drawScheduleRequest
+	if err := decodeRequest(writer, request, &input); err != nil {
+		writeError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
+	store, err := s.sharedStore()
+	if err != nil {
+		writeStoreError(writer, err)
+		return
+	}
+	saved, err := store.SetDrawSchedules(record.ID, input.Schedules)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, safePublicText(err.Error()))
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]interface{}{
+		"account_id": record.ID,
+		"schedules":  saved,
+	})
+}
+
+// handleBalanceAction queries the account's remaining balance (user quota).
+func (s *Server) handleBalanceAction(writer http.ResponseWriter, request *http.Request, accountID string) {
+	ctx, cancel := context.WithTimeout(request.Context(), 90*time.Second)
+	defer cancel()
+	store, err := s.sharedStore()
+	if err != nil {
+		writeStoreError(writer, err)
+		return
+	}
+	runner, err := s.runnerFor(store)
+	if err != nil {
+		writeStoreError(writer, err)
+		return
+	}
+	usage, err := runner.QueryUsage(ctx, accountID)
+	if err != nil {
+		writeUpstreamError(writer, "balance", accountID, err, "余额查询暂时失败，请稍后重试")
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]interface{}{
+		"account_id":                 accountID,
+		"quota_usd":                  usage.QuotaUSD,
+		"used_quota_usd":             usage.UsedQuotaUSD,
+		"request_count":              usage.RequestCount,
+		"quota_conversion_available": usage.QuotaConversionAvailable,
+		"quota_conversion_error":     usage.QuotaConversionError,
+		"queried_at":                 time.Now().UTC(),
 	})
 }
 

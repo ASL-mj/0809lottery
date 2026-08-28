@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"math/big"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,20 +25,13 @@ const (
 	autoDrawRetentionDays   = 7
 )
 
-type AutoDrawWindow struct {
-	ID        string
-	Label     string
-	StartHour int
-}
-
-var autoDrawWindows = []AutoDrawWindow{
-	{ID: "morning", Label: "早间 08:00–09:00", StartHour: 8},
-	{ID: "afternoon", Label: "午间 13:00–14:00", StartHour: 13},
-	{ID: "evening", Label: "晚间 18:00–19:00", StartHour: 18},
-}
-
-func AutoDrawWindows() []AutoDrawWindow {
-	return append([]AutoDrawWindow(nil), autoDrawWindows...)
+// ScheduleLabel renders a human-readable description of a user-defined
+// auto-draw schedule entry.
+func ScheduleLabel(entry state.AutoDrawSchedule) string {
+	if entry.Kind == state.AutoDrawScheduleRandom {
+		return fmt.Sprintf("每天 %s–%s 随机", entry.Start, entry.End)
+	}
+	return fmt.Sprintf("每天 %s", entry.Start)
 }
 
 type AutoDrawExecutor func(context.Context, string, string) (DrawAvailableOutcome, error)
@@ -140,38 +134,37 @@ func (s *AutoDrawScheduler) Tick(ctx context.Context) error {
 	return tickError
 }
 
+// ensurePlans materializes today's pending plan for every enabled account's
+// schedule entry. Window entries whose end has already passed today are
+// skipped; they start again the next day.
 func (s *AutoDrawScheduler) ensurePlans(date string, now time.Time) ([]state.AutoDrawPlan, error) {
 	enabled, err := s.repo.ListEnabled()
 	if err != nil {
 		return nil, fmt.Errorf("list enabled accounts: %w", err)
 	}
 	existing := s.store.AutoDrawPlans(date)
-	existingByAccountWindow := make(map[string]state.AutoDrawPlan, len(existing))
+	existingByAccountSchedule := make(map[string]state.AutoDrawPlan, len(existing))
 	for _, plan := range existing {
-		existingByAccountWindow[plan.AccountID+"\x00"+plan.WindowID] = plan
+		existingByAccountSchedule[plan.AccountID+"\x00"+plan.WindowID] = plan
 	}
-	missing := make([]state.AutoDrawPlan, 0, len(enabled)*len(autoDrawWindows))
+	missing := make([]state.AutoDrawPlan, 0)
 	for _, record := range enabled {
 		accountID := strings.TrimSpace(record.ID)
 		if accountID == "" {
 			continue
 		}
-		for _, window := range autoDrawWindows {
-			if _, ok := existingByAccountWindow[accountID+"\x00"+window.ID]; ok {
+		for _, entry := range s.store.DrawSchedules(record.ID) {
+			if _, ok := existingByAccountSchedule[accountID+"\x00"+entry.ID]; ok {
 				continue
 			}
-			offset, err := s.randomOffset(60 * 60)
-			if err != nil {
-				return nil, fmt.Errorf("schedule random time for %s/%s: %w", accountID, window.ID, err)
+			plannedAt, ok := s.scheduleTime(date, entry, now)
+			if !ok {
+				continue
 			}
-			if offset < 0 || offset >= 60*60 {
-				return nil, fmt.Errorf("schedule random time for %s/%s is outside window", accountID, window.ID)
-			}
-			plannedAt := time.Date(now.Year(), now.Month(), now.Day(), window.StartHour, 0, 0, 0, shanghaiLocation).Add(time.Duration(offset) * time.Second)
 			missing = append(missing, state.AutoDrawPlan{
 				Date:      date,
 				AccountID: accountID,
-				WindowID:  window.ID,
+				WindowID:  entry.ID,
 				PlannedAt: plannedAt.UTC(),
 				Status:    state.AutoDrawPlanPending,
 			})
@@ -183,6 +176,46 @@ func (s *AutoDrawScheduler) ensurePlans(date string, now time.Time) ([]state.Aut
 		}
 	}
 	return s.store.AutoDrawPlans(date), nil
+}
+
+// scheduleTime resolves when the schedule should fire today (Beijing time).
+// ok=false means today's window is already over, so no plan is created.
+func (s *AutoDrawScheduler) scheduleTime(date string, entry state.AutoDrawSchedule, now time.Time) (time.Time, bool) {
+	day, err := time.ParseInLocation("2006-01-02", date, shanghaiLocation)
+	if err != nil {
+		return time.Time{}, false
+	}
+	startMinute := clockMinutesOf(entry.Start)
+	startAt := time.Date(day.Year(), day.Month(), day.Day(), startMinute/60, startMinute%60, 0, 0, shanghaiLocation)
+	if entry.Kind != state.AutoDrawScheduleRandom {
+		return startAt, startAt.After(now)
+	}
+	endMinute := clockMinutesOf(entry.End)
+	endAt := time.Date(day.Year(), day.Month(), day.Day(), endMinute/60, endMinute%60, 0, 0, shanghaiLocation)
+	// A window added mid-flight draws randomly within the remaining part.
+	effectiveStart := startAt
+	if effectiveStart.Before(now) {
+		effectiveStart = now
+	}
+	if !endAt.After(effectiveStart) {
+		return time.Time{}, false
+	}
+	duration := int(endAt.Sub(effectiveStart).Seconds())
+	if duration > 3600 {
+		duration = 3600
+	}
+	offset, err := s.randomOffset(duration)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return effectiveStart.Add(time.Duration(offset) * time.Second), true
+}
+
+func clockMinutesOf(value string) int {
+	parts := strings.Split(value, ":")
+	hour, _ := strconv.Atoi(parts[0])
+	minute, _ := strconv.Atoi(parts[1])
+	return hour*60 + minute
 }
 
 func (s *AutoDrawScheduler) executePlan(parent context.Context, key string) error {

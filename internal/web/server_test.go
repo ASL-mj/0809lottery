@@ -254,11 +254,17 @@ func TestPublicRuntimeLogTextRedactsSensitiveHistoricalValues(t *testing.T) {
 	}
 }
 
-func TestAutoDrawStatusEndpointReturnsThreeSafeWindowsPerAccount(t *testing.T) {
+func TestAutoDrawStatusReturnsSchedulesAndPlansPerAccount(t *testing.T) {
 	server := testServer(t)
 	store, err := server.sharedStore()
 	if err != nil {
 		t.Fatalf("sharedStore() error = %v", err)
+	}
+	if _, err := store.SetDrawSchedules("account-a", []state.AutoDrawSchedule{
+		{ID: "morning", Kind: state.AutoDrawScheduleFixed, Start: "08:00"},
+		{ID: "afternoon", Kind: state.AutoDrawScheduleRandom, Start: "13:00", End: "14:00"},
+	}); err != nil {
+		t.Fatalf("SetDrawSchedules() error = %v", err)
 	}
 	now := time.Now().In(shanghaiLocation)
 	today := now.Format("2006-01-02")
@@ -283,7 +289,23 @@ func TestAutoDrawStatusEndpointReturnsThreeSafeWindowsPerAccount(t *testing.T) {
 		t.Fatalf("auto draw status = %d: %s", recorder.Code, recorder.Body.String())
 	}
 	body := recorder.Body.String()
-	for _, required := range []string{`"date":"` + today + `"`, `"account_id":"account-a"`, `"window_id":"morning"`, `"window_id":"afternoon"`, `"window_id":"evening"`, `"status":"completed"`, `"status":"pending"`, `"status":"failed"`, `"planned_at"`, `"executed_at"`, `"message":"已隐藏敏感详情"`} {
+	for _, required := range []string{
+		`"date":"` + today + `"`,
+		`"account_id":"account-a"`,
+		`"schedule_id":"morning"`,
+		`"schedule_id":"afternoon"`,
+		`"schedule_id":"evening"`,
+		`"label":"每天 08:00"`,
+		`"label":"每天 13:00–14:00 随机"`,
+		`"status":"completed"`,
+		`"status":"pending"`,
+		`"status":"failed"`,
+		`"planned_at"`,
+		`"executed_at"`,
+		`"message":"已隐藏敏感详情"`,
+		`"kind":"fixed"`,
+		`"kind":"random"`,
+	} {
 		if !strings.Contains(body, required) {
 			t.Fatalf("auto draw status missing %q: %s", required, body)
 		}
@@ -1312,6 +1334,14 @@ func TestIndexExposesAccountManagementControls(t *testing.T) {
 			t.Fatalf("index missing money helper %s", money)
 		}
 	}
+	for _, feature := range []string{
+		"data-balance", "data-schedule-add", "data-schedule-remove",
+		"账户余额", "/api/accounts/", "draw-schedule",
+	} {
+		if !bytes.Contains(indexHTML, []byte(feature)) {
+			t.Fatalf("index missing feature marker %s", feature)
+		}
+	}
 	if bytes.Contains(indexHTML, []byte("account.username")) {
 		t.Fatal("index must not render raw usernames")
 	}
@@ -1329,7 +1359,7 @@ func TestIndexContainsOnlyAccountControls(t *testing.T) {
 			t.Fatalf("index missing check-in reward display %q", expected)
 		}
 	}
-	for _, expected := range []string{"签到成功：", "签到失败：", "已签到", "领取成功：", "领取失败：", "抽奖成功：", "抽奖失败：", "跳过抽奖：", "今日已领取", "领取结果待确认", "核对结果", "data-checkin", "data-claim", "data-draw", "data-draw-count", "data-refresh", "data-activity", "data-purchase-draw", "data-unlock-pass", "领取中", "抽奖中", "刷新活动", "购买 1 抽 · $", "购买通行证 · $", "今日通行证已购买", "距下一档还需", "今日累计加抽", "全部档位已完成", "window.confirm", "仅北京时间当日有效", "await finishActionAndRefresh(account, 'claiming');", "await finishActionAndRefresh(account, 'drawing');", "await refreshDrawCountOnly(account);", "account.activity_result", "account.activity_error", "pass_unlocked", "purchase_pending", "purchase_unknown", "currentFocusTarget()", "restoreFocus(target)", "390px", ":focus-visible", ".account__identity", ".action--primary", ".metrics", ".metric__value", "<section id=\"accounts\" aria-label=\"账号详情\">", "role=\"status\"", "data-status-account", "额度统一以美元显示", "@media (max-width:1040px)", "@media (max-width:620px)", "系统运行日志", "自动抽奖执行结果，最新优先展示。", "id=\"runtime-logs-refresh\"", "/api/runtime-logs", "运行日志拉取失败：", "最近一次刷新失败：", "暂无运行日志。", "正在读取运行日志...", "morning: '早间 08:00–09:00'", "midday: '午间 13:00–14:00'", "evening: '晚间 18:00–19:00'", "log.account_label || log.account_id", "奖品：", "额度：$", "账号：", "窗口：", "renderRuntimeLogs()", "runtime-log__status", "runtime-state--error", "今日定时抽奖", "已执行 ${handled}/3", ".auto-draw__timeline", ".auto-draw__step--completed", "renderAutoDrawSchedule(account)", "/api/auto-draw-status", "refreshAutoDrawStatus()", "30000", "计划待生成", "执行中", "已跳过"} {
+	for _, expected := range []string{"签到成功：", "签到失败：", "已签到", "领取成功：", "领取失败：", "抽奖成功：", "抽奖失败：", "跳过抽奖：", "今日已领取", "领取结果待确认", "核对结果", "data-checkin", "data-claim", "data-draw", "data-draw-count", "data-refresh", "data-activity", "data-purchase-draw", "data-unlock-pass", "领取中", "抽奖中", "刷新活动", "购买 1 抽 · $", "购买通行证 · $", "今日通行证已购买", "距下一档还需", "今日累计加抽", "全部档位已完成", "window.confirm", "仅北京时间当日有效", "await finishActionAndRefresh(account, 'claiming');", "await finishActionAndRefresh(account, 'drawing');", "await refreshDrawCountOnly(account);", "account.activity_result", "account.activity_error", "pass_unlocked", "purchase_pending", "purchase_unknown", "currentFocusTarget()", "restoreFocus(target)", "390px", ":focus-visible", ".account__identity", ".action--primary", ".metrics", ".metric__value", "<section id=\"accounts\" aria-label=\"账号详情\">", "role=\"status\"", "data-status-account", "额度统一以美元显示", "@media (max-width:1040px)", "@media (max-width:620px)", "系统运行日志", "自动抽奖执行结果，最新优先展示。", "id=\"runtime-logs-refresh\"", "/api/runtime-logs", "运行日志拉取失败：", "最近一次刷新失败：", "暂无运行日志。", "正在读取运行日志...", "morning: '早间 08:00–09:00'", "midday: '午间 13:00–14:00'", "evening: '晚间 18:00–19:00'", "log.account_label || log.account_id", "奖品：", "额度：$", "账号：", "窗口：", "renderRuntimeLogs()", "runtime-log__status", "runtime-state--error", "今日定时抽奖", "已执行 ${handled}/${entries.length}", ".auto-draw__timeline", ".auto-draw__step--completed", "renderAutoDrawSchedule(account)", "/api/auto-draw-status", "refreshAutoDrawStatus()", "30000", "计划待生成", "执行中", "已跳过"} {
 		if !strings.Contains(recorder.Body.String(), expected) {
 			t.Fatalf("index missing check-in feedback %q", expected)
 		}
@@ -1349,4 +1379,107 @@ func testMoneyPtr(raw string) *quota.Money {
 	}
 	money := quota.NewAlreadyUSDPolicy().Convert(amount, quota.Provenance{Source: "test"})
 	return &money
+}
+
+
+func TestDrawScheduleRoundTripAndValidation(t *testing.T) {
+	server := testServer(t)
+
+	put := httptest.NewRecorder()
+	server.Handler().ServeHTTP(put, authenticatedJSONRequest(http.MethodPut, "/api/accounts/account-a/draw-schedule",
+		`{"schedules":[{"id":"morning","kind":"fixed","start":"08:30"},{"kind":"random","start":"13:00","end":"14:00"}]}`))
+	if put.Code != http.StatusOK {
+		t.Fatalf("schedule put status = %d: %s", put.Code, put.Body.String())
+	}
+	if !strings.Contains(put.Body.String(), `"id":"morning"`) || !strings.Contains(put.Body.String(), `"end":"14:00"`) {
+		t.Fatalf("schedule put response = %s", put.Body.String())
+	}
+
+	get := httptest.NewRecorder()
+	server.Handler().ServeHTTP(get, authenticatedRequest(http.MethodGet, "/api/accounts/account-a/draw-schedule", nil))
+	if get.Code != http.StatusOK || !strings.Contains(get.Body.String(), `"kind":"fixed"`) || !strings.Contains(get.Body.String(), `"kind":"random"`) {
+		t.Fatalf("schedule get = %d: %s", get.Code, get.Body.String())
+	}
+
+	invalid := httptest.NewRecorder()
+	server.Handler().ServeHTTP(invalid, authenticatedJSONRequest(http.MethodPut, "/api/accounts/account-a/draw-schedule",
+		`{"schedules":[{"kind":"random","start":"14:00","end":"13:00"}]}`))
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("inverted window status = %d, want 400: %s", invalid.Code, invalid.Body.String())
+	}
+
+	badKind := httptest.NewRecorder()
+	server.Handler().ServeHTTP(badKind, authenticatedJSONRequest(http.MethodPut, "/api/accounts/account-a/draw-schedule",
+		`{"schedules":[{"kind":"whenever","start":"08:00"}]}`))
+	if badKind.Code != http.StatusBadRequest {
+		t.Fatalf("bad kind status = %d, want 400", badKind.Code)
+	}
+
+	unknown := httptest.NewRecorder()
+	server.Handler().ServeHTTP(unknown, authenticatedJSONRequest(http.MethodPut, "/api/accounts/unknown/draw-schedule",
+		`{"schedules":[]}`))
+	if unknown.Code != http.StatusNotFound {
+		t.Fatalf("unknown account status = %d, want 404", unknown.Code)
+	}
+}
+
+func TestBalanceEndpointReturnsMoneySnapshotAndStoresUsage(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/status":
+			_, _ = writer.Write([]byte(`{"success":true,"data":{"quota_per_unit":500}}`))
+		case "/api/user/self":
+			if request.Header.Get("Authorization") != "Bearer parent-token" {
+				t.Fatalf("self authorization = %q", request.Header.Get("Authorization"))
+			}
+			_, _ = writer.Write([]byte(`{"success":true,"data":{"user":{"quota":1000,"used_quota":250,"request_count":7}}}`))
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer upstream.Close()
+
+	server := testServer(t)
+	server.cfg.BaseURL = upstream.URL
+	store, err := server.sharedStore()
+	if err != nil {
+		t.Fatalf("sharedStore() error = %v", err)
+	}
+	if err := store.PutAuth("account-a", state.AuthState{
+		UserID:                1,
+		ParentAccessToken:     "parent-token",
+		ParentAccessExpiresAt: time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("PutAuth() error = %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, authenticatedRequest(http.MethodPost, "/api/accounts/account-a/balance", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("balance status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	body := recorder.Body.String()
+	for _, required := range []string{
+		`"account_id":"account-a"`,
+		`"quota_usd":{"currency":"USD","value":"2"`,
+		`"used_quota_usd":{"currency":"USD","value":"0.5"`,
+		`"request_count":7`,
+	} {
+		if !strings.Contains(body, required) {
+			t.Fatalf("balance response missing %q: %s", required, body)
+		}
+	}
+
+	shared, err := server.sharedStore()
+	if err != nil {
+		t.Fatalf("sharedStore() error = %v", err)
+	}
+	if _, ok := shared.Snapshot("account-a", "usage"); !ok {
+		t.Fatal("usage snapshot missing after balance query")
+	}
+	list := httptest.NewRecorder()
+	server.Handler().ServeHTTP(list, authenticatedRequest(http.MethodGet, "/api/accounts", nil))
+	if !strings.Contains(list.Body.String(), "usage_snapshot") {
+		t.Fatalf("account list missing usage snapshot: %s", list.Body.String())
+	}
 }

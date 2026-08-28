@@ -238,6 +238,7 @@ func (s *Store) RemoveAccountScopedState(accountID string) error {
 		snapshot.Data = append(json.RawMessage(nil), snapshot.Data...)
 		previousSnapshots[key] = snapshot
 	}
+	previousSchedules := s.data.DrawSchedules[accountID]
 	previousPlans := make(map[string]AutoDrawPlan, len(s.data.Plans))
 	for key, plan := range s.data.Plans {
 		previousPlans[key] = copyAutoDrawPlan(plan)
@@ -271,12 +272,16 @@ func (s *Store) RemoveAccountScopedState(accountID string) error {
 		logs = append(logs, log)
 	}
 	s.data.Logs = logs
+	delete(s.data.DrawSchedules, accountID)
 
 	if err := s.persistLocked(); err != nil {
 		s.data.Actions = previousActions
 		s.data.Snapshots = previousSnapshots
 		s.data.Plans = previousPlans
 		s.data.Logs = previousLogs
+		if previousSchedules != nil {
+			s.data.DrawSchedules[accountID] = previousSchedules
+		}
 		return err
 	}
 	return nil

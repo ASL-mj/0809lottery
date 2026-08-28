@@ -150,6 +150,8 @@ type diskState struct {
 	// not moved to the secret vault yet. Migrated version-4 files never
 	// contain it.
 	LegacyAuth map[string]AuthState    `json:"legacy_auth,omitempty"`
+	// DrawSchedules holds per-account user-defined auto-draw schedules.
+	DrawSchedules map[string][]AutoDrawSchedule `json:"draw_schedules,omitempty"`
 	Actions   map[string]Action        `json:"actions"`
 	Snapshots map[string]Snapshot      `json:"snapshots"`
 	Plans     map[string]AutoDrawPlan  `json:"plans,omitempty"`
@@ -209,6 +211,7 @@ func Open(path string) (*Store, error) {
 			Actions:    make(map[string]Action),
 			Snapshots:  make(map[string]Snapshot),
 			Plans:      make(map[string]AutoDrawPlan),
+			DrawSchedules: make(map[string][]AutoDrawSchedule),
 			Logs:       make([]RuntimeLog, 0),
 		},
 		actionLocks: make(map[string]*actionLock),
@@ -794,6 +797,9 @@ func (s *Store) load() error {
 	}
 	if s.data.Plans == nil {
 		s.data.Plans = make(map[string]AutoDrawPlan)
+	}
+	if s.data.DrawSchedules == nil {
+		s.data.DrawSchedules = make(map[string][]AutoDrawSchedule)
 	}
 	if s.data.Logs == nil {
 		s.data.Logs = make([]RuntimeLog, 0)

@@ -30,12 +30,12 @@ func testMoneyPointer(raw string) *quota.Money {
 	return &money
 }
 
-func TestAutoDrawSchedulerCreatesOneRandomPlanPerAccountAndWindow(t *testing.T) {
+func TestAutoDrawSchedulerCreatesPlansForUserSchedules(t *testing.T) {
 	store := openAutoDrawTestStore(t)
 	now := autoDrawTime(2026, time.August, 8, 7, 0, 0)
 	offsets := []int{0, 3599, 1800, 12, 34, 56}
 	scheduler := newAutoDrawTestScheduler(store, []string{"account-b", "account-a"}, &now, offsets, func(context.Context, string, string) (DrawAvailableOutcome, error) {
-		t.Fatal("draw must not run before the first window")
+		t.Fatal("draw must not run before the first schedule")
 		return DrawAvailableOutcome{}, nil
 	})
 
@@ -51,21 +51,21 @@ func TestAutoDrawSchedulerCreatesOneRandomPlanPerAccountAndWindow(t *testing.T) 
 		if plan.IdempotencyKey == "" || plan.Status != state.AutoDrawPlanPending {
 			t.Fatalf("new plan = %#v", plan)
 		}
-		local := plan.PlannedAt.In(shanghaiLocation)
-		window, ok := autoDrawWindowByID(plan.WindowID)
-		if !ok || local.Hour() != window.StartHour || local.Minute() < 0 || local.Minute() >= 60 {
-			t.Fatalf("planned time is outside %q: %s", plan.WindowID, local)
-		}
-		if local.Before(time.Date(local.Year(), local.Month(), local.Day(), window.StartHour, 0, 0, 0, shanghaiLocation)) || !local.Before(time.Date(local.Year(), local.Month(), local.Day(), window.StartHour+1, 0, 0, 0, shanghaiLocation)) {
-			t.Fatalf("planned time is outside approved range: %#v", plan)
-		}
 		seen[plan.AccountID+"/"+plan.WindowID] = plan
 	}
 	for _, accountID := range []string{"account-a", "account-b"} {
-		for _, window := range autoDrawWindows {
-			if _, ok := seen[accountID+"/"+window.ID]; !ok {
-				t.Fatalf("missing %s/%s plan", accountID, window.ID)
-			}
+		morning := seen[accountID+"/morning"]
+		if local := morning.PlannedAt.In(shanghaiLocation); local.Hour() != 8 || local.Minute() != 0 || local.Second() != 0 {
+			t.Fatalf("fixed schedule time = %s, want 08:00:00", local)
+		}
+		evening := seen[accountID+"/evening"]
+		if local := evening.PlannedAt.In(shanghaiLocation); local.Hour() != 18 || local.Minute() != 0 {
+			t.Fatalf("fixed schedule time = %s, want 18:00", local)
+		}
+		afternoon := seen[accountID+"/afternoon"]
+		local := afternoon.PlannedAt.In(shanghaiLocation)
+		if local.Hour() != 13 || local.Minute() < 0 || local.Minute() >= 60 {
+			t.Fatalf("random schedule time outside window: %s", local)
 		}
 	}
 
@@ -75,6 +75,73 @@ func TestAutoDrawSchedulerCreatesOneRandomPlanPerAccountAndWindow(t *testing.T) 
 	if len(store.AutoDrawPlans(now.Format("2006-01-02"))) != 6 {
 		t.Fatal("second tick duplicated plans")
 	}
+}
+
+// Accounts without any user-defined schedule must not receive plans, and a
+// fixed schedule whose time already passed today is not created retroactively.
+func TestAutoDrawSchedulerWithoutSchedulesCreatesNoPlans(t *testing.T) {
+	store := openAutoDrawTestStore(t)
+	now := autoDrawTime(2026, time.August, 8, 9, 30, 0)
+	scheduler := newAutoDrawTestScheduler(store, []string{"account-a"}, &now, nil, func(context.Context, string, string) (DrawAvailableOutcome, error) {
+		t.Fatal("nothing may be scheduled without user schedules")
+		return DrawAvailableOutcome{}, nil
+	})
+
+	if _, err := store.SetDrawSchedules("account-a", nil); err != nil {
+		t.Fatalf("clear schedules: %v", err)
+	}
+	if err := scheduler.Tick(context.Background()); err != nil {
+		t.Fatalf("Tick() without schedules error = %v", err)
+	}
+	if plans := store.AutoDrawPlans(now.Format("2006-01-02")); len(plans) != 0 {
+		t.Fatalf("plans created without schedules: %#v", plans)
+	}
+
+	// A missed fixed time is not created retroactively...
+	if _, err := store.SetDrawSchedules("account-a", []state.AutoDrawSchedule{
+		{ID: "missed", Kind: state.AutoDrawScheduleFixed, Start: "08:30"},
+	}); err != nil {
+		t.Fatalf("set missed schedule: %v", err)
+	}
+	if err := scheduler.Tick(context.Background()); err != nil {
+		t.Fatalf("Tick() with missed schedule error = %v", err)
+	}
+	if _, err := findAutoDrawPlanErr(store, now.Format("2006-01-02"), "account-a", "missed"); err == nil {
+		t.Fatal("plan was created for a missed fixed time")
+	}
+
+	// ...but an upcoming one is, and fires at the exact minute once the
+	// scheduler has ticked between setting it and the fire time.
+	if _, err := store.SetDrawSchedules("account-a", []state.AutoDrawSchedule{
+		{ID: "upcoming", Kind: state.AutoDrawScheduleFixed, Start: "09:45"},
+	}); err != nil {
+		t.Fatalf("set upcoming schedule: %v", err)
+	}
+	if err := scheduler.Tick(context.Background()); err != nil {
+		t.Fatalf("Tick() after setting upcoming schedule error = %v", err)
+	}
+	now = autoDrawTime(2026, time.August, 8, 9, 45, 1)
+	calls := 0
+	scheduler.draw = func(context.Context, string, string) (DrawAvailableOutcome, error) {
+		calls++
+		return DrawAvailableOutcome{Result: &lottery.DrawResult{Prize: lottery.Prize{ShortLabel: "奖品"}}}, nil
+	}
+	if err := scheduler.Tick(context.Background()); err != nil {
+		t.Fatalf("Tick() with upcoming schedule error = %v", err)
+	}
+	plan := findAutoDrawPlan(t, store, now.Format("2006-01-02"), "account-a", "upcoming")
+	if plan.Status != state.AutoDrawPlanCompleted || calls != 1 {
+		t.Fatalf("fixed schedule did not fire once: calls=%d plan=%#v", calls, plan)
+	}
+}
+
+func findAutoDrawPlanErr(store *state.Store, date, accountID, scheduleID string) (state.AutoDrawPlan, error) {
+	for _, plan := range store.AutoDrawPlans(date) {
+		if plan.AccountID == accountID && plan.WindowID == scheduleID {
+			return plan, nil
+		}
+	}
+	return state.AutoDrawPlan{}, errors.New("plan not found")
 }
 
 func TestAutoDrawSchedulerCompletesDuePlanOnlyOnce(t *testing.T) {
@@ -290,6 +357,13 @@ func newAutoDrawTestScheduler(store *state.Store, accountIDs []string, now *time
 				panic(fmt.Sprintf("create test account %s: %v", accountID, err))
 			}
 		}
+		if _, err := store.SetDrawSchedules(accountID, []state.AutoDrawSchedule{
+			{ID: "morning", Kind: state.AutoDrawScheduleFixed, Start: "08:00"},
+			{ID: "afternoon", Kind: state.AutoDrawScheduleRandom, Start: "13:00", End: "14:00"},
+			{ID: "evening", Kind: state.AutoDrawScheduleFixed, Start: "18:00"},
+		}); err != nil {
+			panic(fmt.Sprintf("seed draw schedules for %s: %v", accountID, err))
+		}
 	}
 	nextOffset := 0
 	return &AutoDrawScheduler{
@@ -299,8 +373,8 @@ func newAutoDrawTestScheduler(store *state.Store, accountIDs []string, now *time
 			return *now
 		},
 		randomOffset: func(limit int) (int, error) {
-			if limit != 60*60 {
-				return 0, errors.New("unexpected random limit")
+			if limit <= 0 {
+				return 0, errors.New("invalid random limit")
 			}
 			if nextOffset >= len(offsets) {
 				return 0, errors.New("random offset exhausted")
@@ -328,15 +402,6 @@ func findAutoDrawPlan(t *testing.T, store *state.Store, date, accountID, windowI
 	}
 	t.Fatalf("auto draw plan not found: %s/%s/%s", date, accountID, windowID)
 	return state.AutoDrawPlan{}
-}
-
-func autoDrawWindowByID(id string) (AutoDrawWindow, bool) {
-	for _, window := range autoDrawWindows {
-		if window.ID == id {
-			return window, true
-		}
-	}
-	return AutoDrawWindow{}, false
 }
 
 // Only enabled registry accounts may receive auto-draw plans.

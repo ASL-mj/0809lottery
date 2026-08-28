@@ -64,6 +64,11 @@
     .auto-draw__step--completed .auto-draw__status { color:var(--ok); }
     .auto-draw__step--failed .auto-draw__status { color:var(--error); }
     .auto-draw__error { margin-top:7px; color:var(--error); font-size:11px; }
+    .auto-draw__empty { margin:0; padding:2px 0 8px; color:var(--muted); font-size:11px; }
+    .auto-draw__form { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-top:10px; }
+    .auto-draw__form .sched-kind, .auto-draw__form .sched-start, .auto-draw__form .sched-end { font:inherit; font-size:12px; padding:5px 7px; border:1px solid var(--line-strong); border-radius:5px; background:var(--paper); color:var(--ink); }
+    .auto-draw__step .action--compact { margin-top:4px; height:24px; font-size:10px; padding:0 8px; }
+    .balance-section { padding-bottom:18px; }
     .account__body { flex:1; padding:17px 18px 16px; }
     .draw-section { padding-bottom:18px; }
     .section-head { min-width:0; display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:6px 14px; margin-bottom:10px; }
@@ -348,6 +353,11 @@
         refreshing: false,
         querying_draw: false,
         querying_activity: false,
+        balancing: false,
+        saving_schedule: false,
+        balance_result: null,
+        balance_error: '',
+        draw_schedules: [],
         purchasing_draw: false,
         unlocking_pass: false,
         activity_result: null,
@@ -375,15 +385,60 @@
       const plannedAt = formatClock(step.planned_at);
       return { tone: 'pending', label: plannedAt ? `计划 ${plannedAt}` : '计划待生成' };
     }
+    function formatScheduleLabel(entry) {
+      if (entry.kind === 'random') return `每天 ${entry.start}–${entry.end} 随机`;
+      return `每天 ${entry.start}`;
+    }
+    function autoDrawPlanDisplay(plan) {
+      const status = String(plan.status || 'pending').toLowerCase();
+      const executedAt = formatClock(plan.executed_at);
+      if (status === 'completed') return { tone: 'completed', label: `已完成${executedAt ? ` · ${executedAt}` : ''}` };
+      if (status === 'skipped') return { tone: 'skipped', label: `已跳过${executedAt ? ` · ${executedAt}` : ''}` };
+      if (status === 'failed') return { tone: 'failed', label: `失败${executedAt ? ` · ${executedAt}` : ''}` };
+      if (status === 'running') return { tone: 'running', label: '执行中' };
+      const plannedAt = formatClock(plan.planned_at);
+      return { tone: 'pending', label: plannedAt ? `计划 ${plannedAt}` : '计划待生成' };
+    }
+    function scheduleEntries(account) {
+      if (Array.isArray(account.auto_draw?.schedules) && account.auto_draw.schedules.length) return account.auto_draw.schedules;
+      return Array.isArray(account.draw_schedules) ? account.draw_schedules : [];
+    }
     function renderAutoDrawSchedule(account) {
-      const steps = autoDrawSteps(account);
-      const handled = steps.filter((step) => ['completed', 'skipped', 'failed'].includes(String(step.status || '').toLowerCase())).length;
-      const items = steps.map((step) => {
-        const display = autoDrawStepDisplay(step);
-        return `<li class="auto-draw__step auto-draw__step--${display.tone}"><div class="auto-draw__dot" aria-hidden="true"></div><div class="auto-draw__time">${step.time}</div><div class="auto-draw__status">${escapeHTML(display.label)}</div></li>`;
+      const entries = scheduleEntries(account);
+      const plansBySchedule = new Map((Array.isArray(account.auto_draw?.plans) ? account.auto_draw.plans : []).map((plan) => [plan.schedule_id, plan]));
+      const handled = entries.filter((entry) => {
+        const plan = plansBySchedule.get(entry.id);
+        return plan && ['completed', 'skipped', 'failed'].includes(String(plan.status).toLowerCase());
+      }).length;
+      const items = entries.map((entry) => {
+        const plan = plansBySchedule.get(entry.id);
+        const display = plan ? autoDrawPlanDisplay(plan) : { tone: 'pending', label: '计划待生成' };
+        return `<li class="auto-draw__step auto-draw__step--${display.tone}"><div class="auto-draw__dot" aria-hidden="true"></div><div class="auto-draw__time">${escapeHTML(entry.label || formatScheduleLabel(entry))}</div><div class="auto-draw__status">${escapeHTML(display.label)}<button class="action action--compact" type="button" data-schedule-remove="${escapeHTML(account.id)}" data-schedule-id="${escapeHTML(entry.id)}">移除</button></div></li>`;
       }).join('');
+      const list = entries.length ? `<ol class="auto-draw__timeline">${items}</ol>` : '<p class="auto-draw__empty">尚未配置定时抽奖。添加固定时间或时段随机计划后，每天各执行一次。</p>';
+      const form = `<div class="auto-draw__form"><select class="sched-kind" aria-label="计划类型"><option value="fixed">固定时间</option><option value="random">时段随机</option></select><input class="sched-start" type="time" aria-label="开始时间" required><input class="sched-end" type="time" aria-label="结束时间（时段随机）"><button class="action action--compact" type="button" data-schedule-add="${escapeHTML(account.id)}" ${account.saving_schedule ? 'disabled' : ''}>${account.saving_schedule ? '保存中' : '添加计划'}</button></div>`;
       const error = account.auto_draw_error ? `<div class="auto-draw__error">计划更新失败：${escapeHTML(account.auto_draw_error)}</div>` : '';
-      return `<section class="auto-draw" aria-label="今日定时抽奖进度"><div class="auto-draw__head"><h3 class="auto-draw__title">今日定时抽奖</h3><span class="auto-draw__summary">已执行 ${handled}/3</span></div><ol class="auto-draw__timeline">${items}</ol>${error}</section>`;
+      return `<section class="auto-draw" aria-label="定时抽奖计划"><div class="auto-draw__head"><h3 class="auto-draw__title">今日定时抽奖</h3>${entries.length ? `<span class="auto-draw__summary">已执行 ${handled}/${entries.length}</span>` : ''}</div>${list}${form}${error}</section>`;
+    }
+    function usageData(account) {
+      if (account.balance_result) return account.balance_result;
+      const snapshot = account.usage_snapshot;
+      if (!snapshot || !snapshot.data || typeof snapshot.data !== 'object') return null;
+      return { ...snapshot.data, queried_at: snapshot.queried_at || snapshot.data.queried_at };
+    }
+    function renderBalance(account) {
+      const usage = usageData(account);
+      const toolbar = `<div class="activity-toolbar"><button class="action action--compact" type="button" data-balance="${escapeHTML(account.id)}" ${account.balancing ? 'disabled' : ''}>${icons.refresh}${account.balancing ? '刷新中' : '刷新余额'}</button></div>`;
+      if (!usage) {
+        const emptyText = account.balance_error ? `余额查询失败：${escapeHTML(account.balance_error)}` : '尚未查询余额。';
+        const emptyClass = account.balance_error ? ' account__status--error' : '';
+        return `<section class="balance-section"><div class="section-head"><h3 class="section-title">账户余额</h3>${toolbar}</div><div class="draw-empty${emptyClass}">${emptyText}</div></section>`;
+      }
+      const note = usage.quota_conversion_available === false
+        ? `<div class="activity-note activity-note--error">${escapeHTML(usage.quota_conversion_error || '无法获取美元换算配置')}</div>`
+        : '';
+      const meta = usage.queried_at ? `更新于 ${formatTime(usage.queried_at)}` : '';
+      return `<section class="balance-section"><div class="section-head"><h3 class="section-title">账户余额</h3>${toolbar}</div>${meta ? `<div class="section-meta">${escapeHTML(meta)}</div>` : ''}<div class="metrics"><div class="metric"><div class="metric__label">剩余额度</div><div class="metric__value">${formatMoney(usage.quota_usd)}</div></div><div class="metric"><div class="metric__label">已用额度</div><div class="metric__value">${formatMoney(usage.used_quota_usd)}</div></div><div class="metric"><div class="metric__label">请求次数</div><div class="metric__value">${toNumber(usage.request_count)}</div></div></div>${note}</section>`;
     }
     function renderDrawCount(account) {
       const result = account.draw_result || drawSnapshotData(account);
@@ -499,7 +554,7 @@
       const error = result?.query_error;
       const checkedIn = account.checkin_status === 'completed';
       const claimDone = account.claim_status === 'completed';
-      let body = renderDrawCount(account) + renderActivity(account) + '<section class="subscriptions"><div class="section-head"><h3 class="section-title">当前有效订阅</h3></div>';
+      let body = renderBalance(account) + renderDrawCount(account) + renderActivity(account) + '<section class="subscriptions"><div class="section-head"><h3 class="section-title">当前有效订阅</h3></div>';
       if (error) body += '<p class="empty">本次未取得订阅数据。</p>';
       else if (!result) body += '<p class="empty">尚未查询订阅。</p>';
       else if (!subscriptions.length) body += '<p class="empty">当前无有效订阅。</p>';
@@ -844,6 +899,77 @@
         focusStatus(account.id);
       }
     }
+    async function balanceAccount(id) {
+      const account = findAccount(id);
+      if (!account || account.balancing) return;
+      account.balancing = true;
+      render();
+      try {
+        account.balance_result = await request(`/api/accounts/${encodeURIComponent(id)}/balance`, { method: 'POST' });
+        account.balance_error = '';
+      } catch (error) {
+        account.balance_error = error.message;
+      } finally {
+        account.balancing = false;
+        render();
+        focusStatus(account.id);
+      }
+    }
+    async function scheduleAdd(id, button) {
+      const account = findAccount(id);
+      if (!account || account.saving_schedule) return;
+      const section = button.closest('.auto-draw');
+      const kind = section.querySelector('.sched-kind').value;
+      const start = section.querySelector('.sched-start').value;
+      const end = section.querySelector('.sched-end').value;
+      if (!start) { setFooter(account, '添加计划失败：请选择开始时间', 'error'); render(); focusStatus(account.id); return; }
+      const entry = kind === 'random' ? { kind, start, end } : { kind, start };
+      if (!account.auto_draw) await refreshAutoDrawStatus();
+      const existing = scheduleEntries(account).map(({ id: entryID, kind: entryKind, start: entryStart, end: entryEnd }) => ({ id: entryID, kind: entryKind, start: entryStart, end: entryEnd }));
+      account.saving_schedule = true;
+      render();
+      try {
+        const payload = await request(`/api/accounts/${encodeURIComponent(id)}/draw-schedule`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ schedules: [...existing, entry] }),
+        });
+        account.draw_schedules = payload.schedules || [];
+        setFooter(account, '定时抽奖计划已保存', 'ok');
+      } catch (error) {
+        setFooter(account, `定时抽奖计划保存失败：${error.message}`, 'error');
+      } finally {
+        account.saving_schedule = false;
+        render();
+        await refreshAutoDrawStatus();
+        focusStatus(account.id);
+      }
+    }
+    async function scheduleRemove(id, scheduleID) {
+      const account = findAccount(id);
+      if (!account || account.saving_schedule) return;
+      account.saving_schedule = true;
+      render();
+      try {
+        const remaining = scheduleEntries(account)
+          .filter((entry) => entry.id !== scheduleID)
+          .map(({ id: entryID, kind: entryKind, start: entryStart, end: entryEnd }) => ({ id: entryID, kind: entryKind, start: entryStart, end: entryEnd }));
+        const payload = await request(`/api/accounts/${encodeURIComponent(id)}/draw-schedule`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ schedules: remaining }),
+        });
+        account.draw_schedules = payload.schedules || [];
+        setFooter(account, '定时抽奖计划已更新', 'ok');
+      } catch (error) {
+        setFooter(account, `定时抽奖计划更新失败：${error.message}`, 'error');
+      } finally {
+        account.saving_schedule = false;
+        render();
+        await refreshAutoDrawStatus();
+        focusStatus(account.id);
+      }
+    }
     async function queryDrawCount(id) {
       const account = findAccount(id);
       if (!account || account.querying_draw) return;
@@ -859,7 +985,13 @@
     root.addEventListener('click', (event) => {
       const manage = event.target.closest('[data-add-account],[data-edit-account],[data-validate-auth],[data-reauthenticate],[data-session-preview],[data-delete-account]');
       if (manage) { handleManagementAction(manage); return; }
-      const button = event.target.closest('[data-refresh],[data-checkin],[data-claim],[data-draw],[data-draw-count],[data-activity],[data-purchase-draw],[data-unlock-pass]');
+      const schedule = event.target.closest('[data-schedule-add],[data-schedule-remove]');
+      if (schedule) {
+        if (schedule.dataset.scheduleAdd) scheduleAdd(schedule.dataset.scheduleAdd, schedule);
+        else scheduleRemove(schedule.dataset.scheduleRemove, schedule.dataset.scheduleId);
+        return;
+      }
+      const button = event.target.closest('[data-refresh],[data-checkin],[data-claim],[data-draw],[data-draw-count],[data-activity],[data-balance],[data-purchase-draw],[data-unlock-pass]');
       if (!button) return;
       if (button.dataset.refresh) refreshAccount(button.dataset.refresh);
       else if (button.dataset.checkin) checkinAccount(button.dataset.checkin);
@@ -867,6 +999,7 @@
       else if (button.dataset.draw) drawAccount(button.dataset.draw);
       else if (button.dataset.drawCount) queryDrawCount(button.dataset.drawCount);
       else if (button.dataset.activity) queryActivity(button.dataset.activity);
+      else if (button.dataset.balance) balanceAccount(button.dataset.balance);
       else if (button.dataset.purchaseDraw) purchaseDraw(button.dataset.purchaseDraw);
       else if (button.dataset.unlockPass) unlockPass(button.dataset.unlockPass);
     });
