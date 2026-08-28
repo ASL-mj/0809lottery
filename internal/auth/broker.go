@@ -366,7 +366,9 @@ func (b *Broker) currentTime() time.Time {
 	return b.now()
 }
 
-func (b *Broker) setCapacityHook(hook func(ctx context.Context, accountID string) error) {
+// SetCapacityGuard installs the session-capacity check that runs immediately
+// before an explicit password login. Background intents never reach it.
+func (b *Broker) SetCapacityGuard(hook func(ctx context.Context, accountID string) error) {
 	b.capacityHook = hook
 }
 

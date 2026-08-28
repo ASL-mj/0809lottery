@@ -332,7 +332,7 @@ Expected: pass.
 - Modify: `internal/secret/vault.go`
 - Modify: `internal/auth/broker.go`
 
-- [ ] **Step 1: Write policy tests**
+- [x] **Step 1: Write policy tests**
 
 ```go
 func TestUnsupportedSessionManagerNeverOffersDeletion(t *testing.T) {
@@ -349,7 +349,7 @@ func TestUnsupportedSessionManagerNeverOffersDeletion(t *testing.T) {
 func TestCleanupPolicyKeepsCurrentAndTwoDurableOwnedSessions(t *testing.T) {}
 ```
 
-- [ ] **Step 2: Run the red tests**
+- [x] **Step 2: Run the red tests**
 
 Run:
 
@@ -359,19 +359,19 @@ go test ./internal/auth -run 'Session|Cleanup' -count=1
 
 Expected: fail because capability and policy types do not exist.
 
-- [ ] **Step 3: Implement the non-destructive capability layer**
+- [x] **Step 3: Implement the non-destructive capability layer**
 
 Implement `RemoteSessionManager`, `NewUnsupportedSessionManager`, `SessionCapability`, `CleanupPreview`, `CleanupPolicy` and a 60-second preview registry. `Preview(context.Context, accountID)` returns `(CleanupPreview, error)`; the unsupported manager returns `SessionUnsupported` with zero candidates and no upstream call. Policy considers only `secret.ManagedSession` entries marked `Origin == secret.SessionOriginWorkbench` with a confirmed remote ID. It never selects the currently authenticated session, `Pinned` sessions or unknown sessions.
 
-- [ ] **Step 4: Enforce capacity protection only in explicit login**
+- [x] **Step 4: Enforce capacity protection only in explicit login**
 
 Before `ExplicitReauthenticate` calls `Login`, obtain a preview. For readable/revocable managers at or above `SessionLimit - SessionSafetyMargin`, return `SessionCapacityProtected` unless a confirmed preview can safely free owned sessions. For `unsupported`, the web route needs a second explicit confirmation. Background intents never reach login or cleanup code.
 
-- [ ] **Step 5: Do not add a guessed remote revoke request**
+- [x] **Step 5: Do not add a guessed remote revoke request**
 
 Leave `internal/lottery/client.go` without a session-revoke URL. Create a separate follow-up plan only after the platform contract is captured and reviewed; its fixtures must prove current and unknown sessions are never revoked.
 
-- [ ] **Step 6: Verify capability tests**
+- [x] **Step 6: Verify capability tests**
 
 Run:
 
