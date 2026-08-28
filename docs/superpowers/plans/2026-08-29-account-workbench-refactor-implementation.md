@@ -44,7 +44,7 @@ Existing files to modify: `internal/config/config.go`, `cmd/lottery-bot/main.go`
 - Modify: `internal/state/store_test.go`
 - Create: `internal/auth/broker_test.go`
 
-- [ ] **Step 1: Run the current baseline**
+- [x] **Step 1: Run the current baseline**
 
 Run:
 
@@ -54,7 +54,7 @@ go test ./internal/config ./internal/lottery ./internal/service ./internal/state
 
 Expected: pass, or report the known environment listener restriction rather than a product regression.
 
-- [ ] **Step 2: Add failing tests for the non-negotiable boundaries**
+- [x] **Step 2: Add failing tests for the non-negotiable boundaries**
 
 Extend the existing fake client with `loginCalls`, `refreshCalls`, and `userSelfCalls`. Add a background action test and a public-response test:
 
@@ -67,7 +67,7 @@ if strings.Contains(body, "parent_access_token") || strings.Contains(body, "cook
 }
 ```
 
-- [ ] **Step 3: Verify the new tests are red**
+- [x] **Step 3: Verify the new tests are red**
 
 Run:
 
@@ -88,7 +88,7 @@ Expected: fail because `SessionBroker` does not exist and Runner can still fall 
 - Modify: `config.example.env`
 - Modify: `cmd/lottery-bot/main.go`
 
-- [ ] **Step 1: Write failing Vault tests**
+- [x] **Step 1: Write failing Vault tests**
 
 Cover round trip, wrong key, invalid key, missing key, file mode and cleartext absence:
 
@@ -104,7 +104,7 @@ func TestFileVaultDoesNotPersistCleartext(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the red tests**
+- [x] **Step 2: Run the red tests**
 
 Run:
 
@@ -114,7 +114,7 @@ go test ./internal/secret ./internal/config -count=1
 
 Expected: fail because the package and Vault configuration are absent.
 
-- [ ] **Step 3: Implement the Vault contract and encrypted file adapter**
+- [x] **Step 3: Implement the Vault contract and encrypted file adapter**
 
 Define the only secret-bearing model:
 
@@ -163,7 +163,7 @@ type Vault interface {
 
 Use a fresh random nonce for every AES-256-GCM write, atomic temp-file rename, directory mode `0700`, file mode `0600`, and an exact 32-byte decoded master key. Never log a Bundle, key or encryption failure detail containing a value.
 
-- [ ] **Step 4: Refactor runtime configuration**
+- [x] **Step 4: Refactor runtime configuration**
 
 Replace five account fields with these runtime values:
 
@@ -185,11 +185,11 @@ type Config struct {
 
 Default session values are `50`, `5`, `2`; reject invalid combinations. Keep `LoadLegacyAccounts(getenv)` separate and callable only by migration.
 
-- [ ] **Step 5: Add explicit CLI modes and update the example**
+- [x] **Step 5: Add explicit CLI modes and update the example**
 
 Support exactly `lottery-bot serve` and `lottery-bot migrate`. `serve` requires a Vault key; `migrate` requires that key plus legacy credentials. Replace `ACCOUNT_A` through `ACCOUNT_E` in `config.example.env` with secure Vault-key setup instructions and no credential samples.
 
-- [ ] **Step 6: Verify Vault and config behavior**
+- [x] **Step 6: Verify Vault and config behavior**
 
 Run:
 
