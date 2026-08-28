@@ -615,7 +615,9 @@ go test -race ./internal/account ./internal/secret ./internal/auth ./internal/se
 
 Expected: all commands pass. If the environment prohibits `httptest` listeners, report that exact restriction and run the unaffected package suites; do not classify it as a product failure.
 
-- [x] **Step 6: Perform controlled manual acceptance**
+- [ ] **Step 6: Perform controlled manual acceptance** *(requires a live
+      non-production or explicitly authorized 0809 account; left for the
+      operator — no platform access from this refactor session)*
 
 With a non-production or explicitly authorized account, confirm: adding an account does not call login; refresh does not call login; refresh rejection requires reauthentication; automatic draw skips instead of logging in; UI/API/logs contain no secret; a recorded redacted platform example matches the selected quota policy. Do not issue any remote session revoke call.
 
