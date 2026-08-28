@@ -1292,6 +1292,31 @@ func TestServerCloseReleasesSharedStoreLock(t *testing.T) {
 	_ = store.Close()
 }
 
+func TestIndexExposesAccountManagementControls(t *testing.T) {
+	server := testServer(t)
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, authenticatedRequest(http.MethodGet, "/", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("index status = %d", recorder.Code)
+	}
+	for _, marker := range []string{
+		"data-add-account", "data-edit-account", "data-validate-auth",
+		"data-reauthenticate", "data-session-preview", "data-delete-account",
+	} {
+		if !bytes.Contains(indexHTML, []byte(marker)) {
+			t.Fatalf("missing %s", marker)
+		}
+	}
+	for _, money := range []string{"formatMoney", "额度换算待确认", "额度待确认"} {
+		if !bytes.Contains(indexHTML, []byte(money)) {
+			t.Fatalf("index missing money helper %s", money)
+		}
+	}
+	if bytes.Contains(indexHTML, []byte("account.username")) {
+		t.Fatal("index must not render raw usernames")
+	}
+}
+
 func TestIndexContainsOnlyAccountControls(t *testing.T) {
 	server := testServer(t)
 	recorder := httptest.NewRecorder()

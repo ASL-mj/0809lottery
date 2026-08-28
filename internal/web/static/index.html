@@ -97,6 +97,23 @@
     .account__status--ok { color:var(--ok); }
     .account__status--error { color:var(--error); }
     .page-message { grid-column:1 / -1; padding:24px 0; color:var(--muted); }
+    .auth-badge { display:inline-flex; align-items:center; margin-left:8px; padding:1px 8px; border:1px solid var(--line); border-radius:999px; background:var(--soft); color:var(--muted); font-size:11px; }
+    .auth-badge--ok { border-color:var(--ok-line); background:var(--ok-bg); color:var(--ok); }
+    .auth-badge--error { border-color:#d7b0b0; background:#fdf3f3; color:var(--error); }
+    .account__manage { display:flex; flex-wrap:wrap; gap:6px; padding:10px 14px 12px; border-bottom:1px solid var(--line); background:#fcfcfa; }
+    .action--danger { color:var(--error); border-color:#d7b0b0; }
+    .action--danger:hover:not(:disabled) { border-color:var(--error); background:#fdf3f3; }
+    .account-dialog { border:1px solid var(--line-strong); border-radius:8px; padding:0; min-width:300px; max-width:92vw; }
+    .account-dialog::backdrop { background:rgba(23,23,23,.35); }
+    .account-dialog form { padding:18px; display:grid; gap:10px; }
+    .account-dialog h3 { margin:0; font-size:16px; }
+    .account-dialog label { display:grid; gap:4px; color:var(--muted); font-size:12px; }
+    .account-dialog input { font:inherit; padding:8px 10px; border:1px solid var(--line-strong); border-radius:5px; }
+    .account-dialog .dialog-error { color:var(--error); font-size:12px; min-height:16px; margin:0; }
+    .account-dialog__row { display:flex; gap:8px; justify-content:flex-end; }
+    .preview-state { color:var(--muted); font-size:13px; margin-bottom:8px; }
+    .preview-dialog ul { margin:0; padding-left:18px; color:var(--ink); font-size:13px; }
+    .account__user { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
     .runtime-panel { border:1px solid var(--line-strong); border-radius:7px; background:var(--paper); box-shadow:0 1px 0 rgba(0,0,0,.02); overflow:hidden; }
     .runtime-panel__header { min-width:0; display:flex; align-items:flex-start; justify-content:space-between; gap:14px; padding:18px; border-bottom:1px solid var(--line); background:var(--soft); }
     .runtime-panel__title { margin:0; font-size:16px; line-height:1.3; font-weight:690; }
@@ -153,6 +170,43 @@
       </aside>
     </div>
   </main>
+  <dialog id="account-dialog" class="account-dialog">
+    <form>
+      <h3 id="account-dialog-title">新增账号</h3>
+      <label>显示名<input id="account-dialog-label" name="label" maxlength="64" required></label>
+      <label>登录名<input id="account-dialog-login" name="login_name" autocomplete="off"></label>
+      <label>密码<input id="account-dialog-password" name="password" type="password" autocomplete="new-password"></label>
+      <p class="dialog-error" id="account-dialog-error"></p>
+      <div class="account-dialog__row"><button type="button" class="action" id="account-dialog-cancel">取消</button><button type="submit" class="action action--primary">保存</button></div>
+    </form>
+  </dialog>
+  <dialog id="reauth-dialog" class="account-dialog">
+    <form>
+      <h3>重新认证</h3>
+      <p>账号：<strong id="reauth-dialog-account"></strong></p>
+      <p class="preview-state">将使用保存的密码向平台发起一次新的登录，可能占用一个平台会话名额。远端会话清理不可用时，请确认当前平台的会话数量仍有余量。</p>
+      <label><input type="checkbox" id="reauth-dialog-confirm" required>我确认要立即重新认证</label>
+      <p class="dialog-error" id="reauth-dialog-error"></p>
+      <div class="account-dialog__row"><button type="button" class="action" id="reauth-dialog-cancel">取消</button><button type="submit" class="action action--primary">重新认证</button></div>
+    </form>
+  </dialog>
+  <dialog id="preview-dialog" class="account-dialog">
+    <form>
+      <h3>远端会话清理</h3>
+      <div id="preview-dialog-body"></div>
+      <div class="account-dialog__row"><button type="button" class="action" id="preview-dialog-close">关闭</button></div>
+    </form>
+  </dialog>
+  <dialog id="delete-dialog" class="account-dialog">
+    <form>
+      <h3>删除账号</h3>
+      <p>账号：<strong id="delete-dialog-account"></strong></p>
+      <p class="preview-state">将删除本地凭据、业务快照与计划，且不可恢复。该账号在平台上的会话不会被清理。</p>
+      <label><input type="checkbox" id="delete-dialog-confirm" required>我确认删除该账号及其本地数据</label>
+      <p class="dialog-error" id="delete-dialog-error"></p>
+      <div class="account-dialog__row"><button type="button" class="action" id="delete-dialog-cancel">取消</button><button type="submit" class="action action--danger">删除</button></div>
+    </form>
+  </dialog>
   <script>
     const state = { accounts: [], activeAccountId: null, runtimeLogs: [], logsLoading: false, logsError: '', autoDrawLoading: false };
     const root = document.querySelector('#accounts');
@@ -168,6 +222,8 @@
       success: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21.8 10A10 10 0 1 1 17 3.3"/><path d="m9 11 3 3L22 4"/></svg>',
       error: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6M9 9l6 6"/></svg>',
       info: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>',
+      edit: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
+      key: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="7.5" cy="15.5" r="4.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/></svg>',
     };
     logsRefreshButton.innerHTML = `${icons.refresh}<span>刷新日志</span>`;
     const runtimeWindowLabels = {
@@ -193,8 +249,17 @@
       const date = new Date(value);
       return Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat('zh-CN', { hour:'2-digit', minute:'2-digit', hour12:false, timeZone:'Asia/Shanghai' }).format(date);
     };
-    const formatQuota = (value) => value == null ? '未知' : `$ ${Number(value).toFixed(2)}`;
-    const formatAward = (value) => `$${Number(value).toFixed(2)}`;
+    const UNVERIFIED_MONEY_TEXT = '额度待确认（历史数据）';
+    const UNAVAILABLE_MONEY_TEXT = '额度换算待确认';
+    function formatMoney(money) {
+      if (money == null) return UNAVAILABLE_MONEY_TEXT;
+      if (money.state === 'confirmed' && money.display) return String(money.display);
+      if (money.state === 'unverified') return UNVERIFIED_MONEY_TEXT;
+      return UNAVAILABLE_MONEY_TEXT;
+    }
+    const formatQuota = (value) => formatMoney(value);
+    const formatAward = (value) => formatMoney(value);
+    const formatUSD = (value) => formatMoney(value);
     const toNumber = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
     function formatRuntimeStatus(status) {
       if (status === 'success' || status === 'completed') return { label: '成功', tone: 'ok' };
@@ -217,7 +282,7 @@
       const windowLabel = formatRuntimeWindow(log.window_id);
       const details = [];
       if (log.prize_label) details.push(`奖品：${escapeHTML(log.prize_label)}`);
-      if (log.quota_delta_usd != null && !Number.isNaN(Number(log.quota_delta_usd))) details.push(`额度：$${Number(log.quota_delta_usd).toFixed(2)}`);
+      if (log.quota_delta_usd && typeof log.quota_delta_usd === 'object') details.push(`额度：${formatMoney(log.quota_delta_usd)}`);
       const detailText = details.length ? ` · ${details.join(' · ')}` : '';
       const statusClass = status.tone === 'ok' ? ' runtime-log__status--ok' : status.tone === 'error' ? ' runtime-log__status--error' : '';
       return `<article class="runtime-log"><div class="runtime-log__top"><div class="runtime-log__time">${escapeHTML(formatTime(log.occurred_at) || '时间未知')}</div><span class="runtime-log__status${statusClass}">${status.label}</span></div><div class="runtime-log__meta"><span>账号：${accountLabel}</span><span>窗口：${windowLabel}</span></div><div class="runtime-log__message">${escapeHTML(log.message || '无附加说明')}${detailText}</div></article>`;
@@ -242,8 +307,16 @@
       const note = state.logsError ? `<div class="runtime-state runtime-state--error">最近一次刷新失败：${escapeHTML(state.logsError)}</div>` : '';
       logsRoot.innerHTML = `${note}${items}`;
     }
-    async function request(url, options) {
-      const response = await fetch(url, options);
+    const unsafeMethods = new Set(['POST', 'PATCH', 'PUT', 'DELETE']);
+    function csrfToken() {
+      const match = document.cookie.match(/(?:^|;\s*)workbench_csrf=([^;]*)/);
+      return match ? decodeURIComponent(match[1]) : '';
+    }
+    async function request(url, options = {}) {
+      const method = (options.method || 'GET').toUpperCase();
+      const headers = { ...(options.headers || {}) };
+      if (unsafeMethods.has(method)) headers['X-CSRF-Token'] = csrfToken();
+      const response = await fetch(url, { ...options, method, headers });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || '请求失败');
       return data;
@@ -344,7 +417,7 @@
       const points = toNumber(activity.lucky_points);
       const maxPoints = toNumber(activity.lucky_max_points);
       const bonusDraws = toNumber(activity.spend_bonus_draws);
-      const nextRemaining = activity.next_spend_remaining_usd != null ? formatUSD(activity.next_spend_remaining_usd) : '';
+      const nextRemaining = activity.next_spend_remaining_usd ? formatMoney(activity.next_spend_remaining_usd) : '';
       const helper = activity.next_spend_remaining_usd != null
         ? `距下一档还需 ${nextRemaining} · 今日累计加抽 ${bonusDraws} 次`
         : `全部档位已完成 · 今日累计加抽 ${bonusDraws} 次`;
@@ -366,10 +439,22 @@
       const meta = subscription.end_time ? `到期：${formatTime(subscription.end_time)}` : '未提供到期时间';
       return `<div class="subscription"><div><div class="subscription__plan">${escapeHTML(subscription.plan_title || '未命名订阅')}</div><div class="subscription__meta">${escapeHTML(meta)}</div></div><div class="subscription__quota">${escapeHTML(quota)}<div class="subscription__meta">${subscription.unlimited ? '状态' : '剩余'}</div></div></div>`;
     }
+    function authBadge(account) {
+      const health = String(account.auth_health || 'unknown');
+      if (health === 'healthy') return '认证正常';
+      if (health === 'needs_reauth') return '需要重新认证';
+      return '认证状态未知';
+    }
+    function authTone(account) {
+      const health = String(account.auth_health || 'unknown');
+      if (health === 'healthy') return 'ok';
+      if (health === 'needs_reauth') return 'error';
+      return 'muted';
+    }
     function renderCheckinReward(account) {
       const reward = account.checkin_quota_awarded;
       if (account.checkin_status === 'completed') {
-        if (reward != null && !Number.isNaN(Number(reward))) {
+        if (reward && reward.state === 'confirmed') {
           return `<div class="account__checkin-reward account__checkin-reward--ok"><span>今日签到奖励</span><strong>${formatAward(reward)}</strong></div>`;
         }
         return '<div class="account__checkin-reward account__checkin-reward--ok">今日已签到 · 奖励待核对</div>';
@@ -399,7 +484,7 @@
       }
       if (checkedIn) {
         const reward = account.checkin_quota_awarded;
-        return { message: `签到成功：${reward != null ? `获得 ${formatAward(reward)} 额度` : (account.checkin_message || '今日已完成')}`, tone: 'ok' };
+        return { message: `签到成功：${reward && reward.state === 'confirmed' ? `获得 ${formatAward(reward)} 额度` : (account.checkin_message || '今日已完成')}`, tone: 'ok' };
       }
       if (error) return { message: error, tone: 'error' };
       if (result?.queried_at) return { message: `已于 ${formatTime(result.queried_at)} 更新`, tone: 'ok' };
@@ -433,7 +518,7 @@
       const drawCountText = account.querying_draw ? '刷新中' : '刷新次数';
       const refreshText = account.refreshing ? '刷新中' : '刷新订阅';
       const autoDrawSchedule = renderAutoDrawSchedule(account);
-      return `<article class="account" data-account-id="${escapeHTML(account.id)}"><div class="account__identity"><div class="account__eyebrow"><span class="account__dot"></span>账号 ${escapeHTML(accountCode)}</div><h2 class="account__name">${escapeHTML(account.label || account.id)}</h2><div class="account__user">${escapeHTML(account.username || '')}</div></div><div class="account__actions"><button class="action${checkedIn ? ' action--done' : ''}" type="button" aria-label="${checkedIn ? '今日已签到' : '执行签到'}" data-checkin="${escapeHTML(account.id)}" ${checkedIn || account.checking_in ? 'disabled' : ''}>${icons.checkin}${checkinText}</button><button class="action${claimDone ? ' action--done' : ''}" type="button" aria-label="领取每日抽奖次数" data-claim="${escapeHTML(account.id)}" ${claimDone || account.claiming ? 'disabled' : ''}>${icons.claim}${claimText}</button><button class="action action--primary" type="button" aria-label="手动抽奖" data-draw="${escapeHTML(account.id)}" ${account.drawing ? 'disabled' : ''}>${icons.draw}${drawText}</button><button class="action" type="button" aria-label="刷新抽奖次数" data-draw-count="${escapeHTML(account.id)}" ${account.querying_draw ? 'disabled' : ''}>${icons.refresh}${drawCountText}</button><button class="action" type="button" aria-label="刷新订阅" data-refresh="${escapeHTML(account.id)}" ${account.refreshing ? 'disabled' : ''}>${icons.subscriptions}${refreshText}</button></div>${autoDrawSchedule}<div class="account__body">${body}</div><div class="account__footer account__status${footerClass}" role="status" aria-live="polite" aria-atomic="true" tabindex="-1" data-status-account="${escapeHTML(account.id)}">${footerIcon}<span>${escapeHTML(footer.message)}</span></div></article>`;
+      return `<article class="account" data-account-id="${escapeHTML(account.id)}"><div class="account__identity"><div class="account__eyebrow"><span class="account__dot"></span>账号 ${escapeHTML(accountCode)}</div><h2 class="account__name">${escapeHTML(account.label || account.id)}</h2><div class="account__user">${escapeHTML(account.masked_login_name || '')}<span class="auth-badge auth-badge--${escapeHTML(authTone(account))}">${escapeHTML(authBadge(account))}</span></div></div><div class="account__actions"><button class="action${checkedIn ? ' action--done' : ''}" type="button" aria-label="${checkedIn ? '今日已签到' : '执行签到'}" data-checkin="${escapeHTML(account.id)}" ${checkedIn || account.checking_in ? 'disabled' : ''}>${icons.checkin}${checkinText}</button><button class="action${claimDone ? ' action--done' : ''}" type="button" aria-label="领取每日抽奖次数" data-claim="${escapeHTML(account.id)}" ${claimDone || account.claiming ? 'disabled' : ''}>${icons.claim}${claimText}</button><button class="action action--primary" type="button" aria-label="手动抽奖" data-draw="${escapeHTML(account.id)}" ${account.drawing ? 'disabled' : ''}>${icons.draw}${drawText}</button><button class="action" type="button" aria-label="刷新抽奖次数" data-draw-count="${escapeHTML(account.id)}" ${account.querying_draw ? 'disabled' : ''}>${icons.refresh}${drawCountText}</button><button class="action" type="button" aria-label="刷新订阅" data-refresh="${escapeHTML(account.id)}" ${account.refreshing ? 'disabled' : ''}>${icons.subscriptions}${refreshText}</button></div><div class="account__manage"><button class="action action--compact" type="button" data-edit-account="${escapeHTML(account.id)}">${icons.edit}编辑</button><button class="action action--compact" type="button" data-validate-auth="${escapeHTML(account.id)}">${icons.info}检查认证</button><button class="action action--compact" type="button" data-reauthenticate="${escapeHTML(account.id)}">${icons.key}重新认证</button><button class="action action--compact" type="button" data-session-preview="${escapeHTML(account.id)}">${icons.info}会话清理</button><button class="action action--compact action--danger" type="button" data-delete-account="${escapeHTML(account.id)}">${icons.error}删除</button></div>${autoDrawSchedule}<div class="account__body">${body}</div><div class="account__footer account__status${footerClass}" role="status" aria-live="polite" aria-atomic="true" tabindex="-1" data-status-account="${escapeHTML(account.id)}">${footerIcon}<span>${escapeHTML(footer.message)}</span></div></article>`;
     }
     const focusDataKeys = ['refresh', 'checkin', 'claim', 'draw', 'drawCount', 'activity', 'purchaseDraw', 'unlockPass'];
     function currentFocusTarget() {
@@ -466,14 +551,14 @@
       return `<button class="account-tab" type="button" role="tab" aria-selected="${selected}" data-tab="${escapeHTML(account.id)}" title="${escapeHTML(account.label || account.id)}"><span class="account-tab__code">${escapeHTML(code)}</span><span class="account-tab__label">${escapeHTML(account.label || account.id)}</span></button>`;
     }
     function renderTabs() {
-      if (!state.accounts.length) { tabsRoot.innerHTML = ''; return; }
-      tabsRoot.innerHTML = state.accounts.map(renderAccountTab).join('');
+      const add = `<button class="account-tab" type="button" data-add-account title="新增账号"><span class="account-tab__code">＋</span><span class="account-tab__label">新增账号</span></button>`;
+      tabsRoot.innerHTML = state.accounts.map(renderAccountTab).join('') + add;
     }
     function render() {
       const focusTarget = currentFocusTarget();
       renderTabs();
       if (!state.accounts.length) {
-        root.innerHTML = '<p class="page-message">未配置账号。</p>';
+        root.innerHTML = '<p class="page-message">还没有账号。点击上方「新增账号」开始。</p>';
         return;
       }
       const active = findAccount(state.activeAccountId) || state.accounts[0];
@@ -645,7 +730,7 @@
         if (result.skipped) {
           account.footer_message = `跳过抽奖：${result.message}`;
         } else {
-          const reward = result.quota_delta_usd != null ? `，奖励 $${Number(result.quota_delta_usd).toFixed(2)}` : '';
+          const reward = result.quota_delta_usd ? `，奖励 ${formatMoney(result.quota_delta_usd)}` : '';
           account.footer_message = `抽奖成功：${result.prize_label || '已完成'}${reward}`;
         }
         account.footer_tone = 'ok';
@@ -775,6 +860,8 @@
       }
     }
     root.addEventListener('click', (event) => {
+      const manage = event.target.closest('[data-add-account],[data-edit-account],[data-validate-auth],[data-reauthenticate],[data-session-preview],[data-delete-account]');
+      if (manage) { handleManagementAction(manage); return; }
       const button = event.target.closest('[data-refresh],[data-checkin],[data-claim],[data-draw],[data-draw-count],[data-activity],[data-purchase-draw],[data-unlock-pass]');
       if (!button) return;
       if (button.dataset.refresh) refreshAccount(button.dataset.refresh);
@@ -786,7 +873,99 @@
       else if (button.dataset.purchaseDraw) purchaseDraw(button.dataset.purchaseDraw);
       else if (button.dataset.unlockPass) unlockPass(button.dataset.unlockPass);
     });
+    logsRefreshButton.addEventListener('click', () => {
+      if (!state.logsLoading) loadRuntimeLogs();
+    });
+    function renderSessionPreview(preview) {
+      if (!preview || preview.capability === 'unsupported') {
+        return `<div class="preview-state">远端会话清理不可用：平台会话查询与撤销接口尚未确认。工作台不会伪造清理结果，也不会因此自动登录。</div>`;
+      }
+      const rows = (preview.candidates || []).map((candidate) => `<li>会话 ${escapeHTML(candidate.remote_id)} · ${escapeHTML(candidate.reason || '')}</li>`).join('');
+      return `<div class="preview-state">可安全释放 ${preview.candidate_count} 个会话，保留 ${preview.keep_count} 个。</div><ul>${rows}</ul>`;
+    }
+    function openDialog(dialog) { if (typeof dialog.showModal === 'function') dialog.showModal(); else dialog.setAttribute('open', ''); }
+    function closeDialog(dialog) { dialog.close ? dialog.close() : dialog.removeAttribute('open'); }
+    const accountDialog = document.querySelector('#account-dialog');
+    const reauthDialog = document.querySelector('#reauth-dialog');
+    const previewDialog = document.querySelector('#preview-dialog');
+    const deleteDialog = document.querySelector('#delete-dialog');
+    let editTargetId = null;
+    function openAccountDialog(account) {
+      editTargetId = account ? account.id : null;
+      document.querySelector('#account-dialog-title').textContent = account ? '编辑账号' : '新增账号';
+      document.querySelector('#account-dialog-label').value = account ? (account.label || '') : '';
+      document.querySelector('#account-dialog-login').value = '';
+      document.querySelector('#account-dialog-password').value = '';
+      openDialog(accountDialog);
+      document.querySelector('#account-dialog-label').focus();
+    }
+    async function submitAccountDialog(event) {
+      event.preventDefault();
+      const label = document.querySelector('#account-dialog-label').value.trim();
+      const loginName = document.querySelector('#account-dialog-login').value.trim();
+      const password = document.querySelector('#account-dialog-password').value;
+      const errorNode = document.querySelector('#account-dialog-error');
+      errorNode.textContent = '';
+      try {
+        if (editTargetId) {
+          const payload = { label };
+          if (loginName) payload.login_name = loginName;
+          if (password) payload.password = password;
+          await request(`/api/accounts/${encodeURIComponent(editTargetId)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        } else {
+          await request('/api/accounts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label, login_name: loginName, password }) });
+        }
+        document.querySelector('#account-dialog-password').value = '';
+        closeDialog(accountDialog);
+        await loadAccounts();
+      } catch (error) {
+        errorNode.textContent = error.message;
+      }
+    }
+    async function submitReauthenticate(accountID) {
+      const errorNode = document.querySelector('#reauth-dialog-error');
+      errorNode.textContent = '';
+      try {
+        await request(`/api/accounts/${encodeURIComponent(accountID)}/reauthenticate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirm: true }) });
+        closeDialog(reauthDialog);
+        await loadAccounts();
+      } catch (error) {
+        errorNode.textContent = error.message;
+      }
+    }
+    async function submitDelete(accountID) {
+      const errorNode = document.querySelector('#delete-dialog-error');
+      errorNode.textContent = '';
+      try {
+        await request(`/api/accounts/${encodeURIComponent(accountID)}`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmation: 'DELETE' }) });
+        closeDialog(deleteDialog);
+        if (state.activeAccountId === accountID) state.activeAccountId = null;
+        await loadAccounts();
+      } catch (error) {
+        errorNode.textContent = error.message;
+      }
+    }
+    accountDialog.addEventListener('submit', submitAccountDialog);
+    document.querySelector('#account-dialog-cancel').addEventListener('click', () => { document.querySelector('#account-dialog-password').value = ''; closeDialog(accountDialog); });
+    reauthDialog.addEventListener('submit', (event) => { event.preventDefault(); submitReauthenticate(reauthDialog.dataset.accountId); });
+    document.querySelector('#reauth-dialog-cancel').addEventListener('click', () => closeDialog(reauthDialog));
+    deleteDialog.addEventListener('submit', (event) => { event.preventDefault(); submitDelete(deleteDialog.dataset.accountId); });
+    document.querySelector('#delete-dialog-cancel').addEventListener('click', () => closeDialog(deleteDialog));
+    document.querySelector('#preview-dialog-close').addEventListener('click', () => closeDialog(previewDialog));
+    function handleManagementAction(button) {
+      if (button.hasAttribute('data-add-account')) { openAccountDialog(null); return; }
+      const accountID = button.dataset.editAccount || button.dataset.validateAuth || button.dataset.reauthenticate || button.dataset.sessionPreview || button.dataset.deleteAccount;
+      if (!accountID) return;
+      const account = findAccount(accountID);
+      if (button.dataset.editAccount) openAccountDialog(account);
+      else if (button.dataset.validateAuth) request(`/api/accounts/${encodeURIComponent(accountID)}/validate`, { method: 'POST' }).then(async (result) => { account.auth_health = result.auth_health; render(); }).catch(async (error) => { setFooter(account, `认证检查失败：${error.message}`, 'error'); render(); });
+      else if (button.dataset.reauthenticate) { reauthDialog.dataset.accountId = accountID; document.querySelector('#reauth-dialog-account').textContent = account?.label || accountID; document.querySelector('#reauth-dialog-error').textContent = ''; openDialog(reauthDialog); }
+      else if (button.dataset.sessionPreview) { request(`/api/accounts/${encodeURIComponent(accountID)}/session-preview`).then((payload) => { document.querySelector('#preview-dialog-body').innerHTML = renderSessionPreview(payload.preview); openDialog(previewDialog); }).catch((error) => { setFooter(account, `会话预览失败：${error.message}`, 'error'); render(); }); }
+      else if (button.dataset.deleteAccount) { deleteDialog.dataset.accountId = accountID; document.querySelector('#delete-dialog-account').textContent = account?.label || accountID; document.querySelector('#delete-dialog-error').textContent = ''; openDialog(deleteDialog); }
+    }
     tabsRoot.addEventListener('click', (event) => {
+      const add = event.target.closest('[data-add-account]');
+      if (add) { openAccountDialog(null); return; }
       const tab = event.target.closest('[data-tab]');
       if (!tab) return;
       const id = tab.dataset.tab;
@@ -795,11 +974,16 @@
       render();
       tabsRoot.querySelector('.account-tab[aria-selected="true"]')?.focus({ preventScroll: true });
     });
-    logsRefreshButton.addEventListener('click', () => {
-      if (!state.logsLoading) loadRuntimeLogs();
-    });
+    async function loadAccounts() {
+      const payload = await request('/api/accounts');
+      const previous = state.activeAccountId;
+      state.accounts = Array.isArray(payload.accounts) ? payload.accounts.map(hydrateAccount) : [];
+      state.activeAccountId = state.accounts.some((item) => item.id === previous) ? previous : (state.accounts[0]?.id || null);
+      render();
+      return refreshAutoDrawStatus();
+    }
     renderRuntimeLogs();
-    request('/api/accounts')
+    loadAccounts()
       .then((payload) => {
         state.accounts = Array.isArray(payload.accounts) ? payload.accounts.map(hydrateAccount) : [];
         state.activeAccountId = state.accounts[0]?.id || null;

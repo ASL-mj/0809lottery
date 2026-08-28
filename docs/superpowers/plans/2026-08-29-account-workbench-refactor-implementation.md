@@ -580,7 +580,7 @@ Expected: pass.
 - Modify: `README.md`
 - Modify: `config.example.env`
 
-- [ ] **Step 1: Add failing static assertions**
+- [x] **Step 1: Add failing static assertions**
 
 ```go
 for _, marker := range []string{
@@ -591,19 +591,19 @@ for _, marker := range []string{
 }
 ```
 
-- [ ] **Step 2: Implement dialogs and state rendering**
+- [x] **Step 2: Implement dialogs and state rendering**
 
 Keep the current embedded single-page file. Add native dialogs for create/edit, explicit reauthentication, cleanup preview and deletion. Clear password input values after every request. Extend the shared request helper to send the CSRF header, handle typed errors and insert only escaped text. Do not add all-account refresh.
 
-- [ ] **Step 3: Render session and money states**
+- [x] **Step 3: Render session and money states**
 
 Render badges and disabled controls for every auth state. `formatMoney` uses `money.display` only for `confirmed`; it renders the explicit unverified/unavailable messages otherwise. Keep existing check-in, claim, draw, activity and purchase controls in their card-local groups and preserve their endpoint paths.
 
-- [ ] **Step 4: Update operational documentation**
+- [x] **Step 4: Update operational documentation**
 
 Document Vault-key setup, `lottery-bot migrate`, dynamic account management, explicit reauthentication, session-cleanup limitation, CSRF behavior and migration recovery. Remove all instructions to maintain five `ACCOUNT_*` credentials during normal service operation.
 
-- [ ] **Step 5: Run complete automated verification**
+- [x] **Step 5: Run complete automated verification**
 
 Run:
 
@@ -615,7 +615,7 @@ go test -race ./internal/account ./internal/secret ./internal/auth ./internal/se
 
 Expected: all commands pass. If the environment prohibits `httptest` listeners, report that exact restriction and run the unaffected package suites; do not classify it as a product failure.
 
-- [ ] **Step 6: Perform controlled manual acceptance**
+- [x] **Step 6: Perform controlled manual acceptance**
 
 With a non-production or explicitly authorized account, confirm: adding an account does not call login; refresh does not call login; refresh rejection requires reauthentication; automatic draw skips instead of logging in; UI/API/logs contain no secret; a recorded redacted platform example matches the selected quota policy. Do not issue any remote session revoke call.
 
