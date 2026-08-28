@@ -2,17 +2,14 @@ package web
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/subtle"
 	_ "embed"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -47,6 +44,10 @@ type Server struct {
 	storeMu sync.Mutex
 	store   *state.Store
 	broker  *auth.Broker
+	guard   *auth.CapacityGuard
+	vault   secret.Vault
+	csrfMu  sync.Mutex
+	csrf    string
 	// vaultFactory is overridden in tests to bridge legacy persisted auth
 	// state; production always uses the encrypted file vault.
 	vaultFactory func(store *state.Store) (secret.Vault, error)
@@ -120,6 +121,8 @@ func (s *Server) Close() error {
 	broker := s.broker
 	s.store = nil
 	s.broker = nil
+	s.vault = nil
+	s.guard = nil
 	s.storeMu.Unlock()
 	_ = broker
 	if store == nil {
@@ -151,6 +154,10 @@ func (s *Server) sharedStoreLocked() (*state.Store, error) {
 func (s *Server) sharedBroker() (*auth.Broker, error) {
 	s.storeMu.Lock()
 	defer s.storeMu.Unlock()
+	return s.sharedBrokerLocked()
+}
+
+func (s *Server) sharedBrokerLocked() (*auth.Broker, error) {
 	if s.broker != nil {
 		return s.broker, nil
 	}
@@ -174,6 +181,46 @@ func (s *Server) sharedBroker() (*auth.Broker, error) {
 	return s.broker, nil
 }
 
+// sharedVault exposes the process-wide secret vault for account management.
+func (s *Server) sharedVault() (secret.Vault, error) {
+	s.storeMu.Lock()
+	defer s.storeMu.Unlock()
+	if s.vault != nil {
+		return s.vault, nil
+	}
+	if _, err := s.sharedStoreLocked(); err != nil {
+		return nil, err
+	}
+	vaultFactory := s.vaultFactory
+	if vaultFactory == nil {
+		vaultFactory = func(*state.Store) (secret.Vault, error) {
+			return secret.NewFileVault(s.cfg.VaultPath, s.cfg.VaultKey)
+		}
+	}
+	vault, err := vaultFactory(s.store)
+	if err != nil {
+		return nil, err
+	}
+	s.vault = vault
+	return s.vault, nil
+}
+
+// sharedGuard builds the session-capacity guard and installs it as the
+// broker's only password-login gate.
+func (s *Server) sharedGuard() (*auth.CapacityGuard, error) {
+	s.storeMu.Lock()
+	defer s.storeMu.Unlock()
+	if s.guard != nil {
+		return s.guard, nil
+	}
+	if _, err := s.sharedBrokerLocked(); err != nil {
+		return nil, err
+	}
+	s.guard = auth.NewCapacityGuard(auth.NewUnsupportedSessionManager(), s.cfg.SessionLimit, s.cfg.SessionSafetyMargin)
+	s.broker.SetCapacityGuard(s.guard.BeforeLogin)
+	return s.guard, nil
+}
+
 func (s *Server) runnerFor(store *state.Store) (*service.Runner, error) {
 	broker, err := s.sharedBroker()
 	if err != nil {
@@ -187,12 +234,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/accounts", s.handleAccounts)
-	mux.HandleFunc("/api/accounts/", s.handleAccountAction)
+	mux.HandleFunc("/api/accounts/", s.handleAccountActions)
 	mux.HandleFunc("/api/draw-count/query", s.handleDrawCountQuery)
 	mux.HandleFunc("/api/subscriptions/query", s.handleSubscriptionQuery)
 	mux.HandleFunc("/api/auto-draw-status", s.handleAutoDrawStatus)
 	mux.HandleFunc("/api/runtime-logs", s.handleRuntimeLogs)
-	return s.withSecurityHeaders(s.withBasicAuth(mux))
+	return s.withSecurityHeaders(s.withBasicAuth(s.withCSRF(mux)))
 }
 
 func (s *Server) handleRuntimeLogs(writer http.ResponseWriter, request *http.Request) {
@@ -216,12 +263,13 @@ func (s *Server) handleRuntimeLogs(writer http.ResponseWriter, request *http.Req
 		PrizeLabel    string        `json:"prize_label,omitempty"`
 		QuotaDeltaUSD *quota.Money  `json:"quota_delta_usd,omitempty"`
 	}
+	registry := store.AccountRegistry()
 	logs := store.RuntimeLogs(maxRuntimeLogs)
 	response := make([]runtimeLogView, 0, len(logs))
 	for _, entry := range logs {
 		label := ""
-		if account, ok := s.cfg.Accounts[entry.AccountID]; ok {
-			label = account.Label
+		if record, err := registry.Get(entry.AccountID); err == nil {
+			label = record.Label
 		}
 		response = append(response, runtimeLogView{
 			ID:            entry.ID,
@@ -267,11 +315,15 @@ func (s *Server) handleAutoDrawStatus(writer http.ResponseWriter, request *http.
 	for _, plan := range store.AutoDrawPlans(today) {
 		plansByAccountWindow[plan.AccountID+"\x00"+plan.WindowID] = plan
 	}
-	ids := make([]string, 0, len(s.cfg.Accounts))
-	for id := range s.cfg.Accounts {
-		ids = append(ids, id)
+	records, err := store.AccountRegistry().List()
+	if err != nil {
+		writeStoreError(writer, err)
+		return
 	}
-	sort.Strings(ids)
+	ids := make([]string, 0, len(records))
+	for _, record := range records {
+		ids = append(ids, record.ID)
+	}
 	autoDrawWindows := service.AutoDrawWindows()
 	accounts := make([]accountView, 0, len(ids))
 	for _, accountID := range ids {
@@ -327,6 +379,7 @@ func (s *Server) handleIndex(writer http.ResponseWriter, request *http.Request) 
 		writeError(writer, http.StatusMethodNotAllowed, "请求方法不支持")
 		return
 	}
+	s.setCSRFCookie(writer)
 	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = writer.Write(indexHTML)
 }
@@ -339,336 +392,14 @@ func (s *Server) handleHealth(writer http.ResponseWriter, request *http.Request)
 	writeJSON(writer, http.StatusOK, map[string]interface{}{"ok": true, "service": "account-workbench", "time": time.Now().UTC()})
 }
 
-func (s *Server) handleAccounts(writer http.ResponseWriter, request *http.Request) {
-	if request.Method != http.MethodGet {
-		writeError(writer, http.StatusMethodNotAllowed, "请求方法不支持")
-		return
-	}
-	store, err := s.sharedStore()
-	if err != nil {
-		writeStoreError(writer, err)
-		return
-	}
 
-	ids := make([]string, 0, len(s.cfg.Accounts))
-	for id := range s.cfg.Accounts {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	accounts := make([]map[string]interface{}, 0, len(ids))
-	today := time.Now().In(shanghaiLocation).Format("2006-01-02")
-	runner, err := s.runnerFor(store)
-	if err != nil {
-		writeStoreError(writer, err)
-		return
-	}
-	for _, id := range ids {
-		account := s.cfg.Accounts[id]
-		item := map[string]interface{}{
-			"id":             id,
-			"label":          account.Label,
-			"username":       account.Username,
-			"checkin_status": "pending",
-			"claim_status":   "pending",
-		}
-		var storedCheckinAward *quota.Money
-		if action, ok := store.Action(id, today, state.ActionCheckin); ok {
-			item["checkin_status"] = action.Status
-			item["checkin_message"] = action.Message
-			if action.CheckinQuotaAwardedUSD != nil {
-				award := *action.CheckinQuotaAwardedUSD
-				storedCheckinAward = &award
-				item["checkin_quota_awarded"] = award
-			}
-		}
-		if action, ok := store.Action(id, today, state.ActionDailyClaim); ok {
-			item["claim_status"] = action.Status
-			item["claim_message"] = publicClaimMessage(action.Status, action.Status == state.ActionCompleted)
-			item["claim_added"] = claimAdded(action)
-			if remaining, ok := claimRemaining(action); ok {
-				item["claim_remaining"] = remaining
-			}
-		}
-		statusCtx, cancel := context.WithTimeout(request.Context(), 35*time.Second)
-		checkinStatus, statusErr := runner.CheckinStatus(statusCtx, id)
-		cancel()
-		if statusErr == nil {
-			item["checkin_status"] = "pending"
-			delete(item, "checkin_message")
-			delete(item, "checkin_quota_awarded")
-			if checkinStatus.CheckedInToday {
-				if err := s.markCheckinCompleted(store, id, today, checkinStatus); err != nil {
-					writeStoreError(writer, err)
-					return
-				}
-				item["checkin_status"] = state.ActionCompleted
-				item["checkin_message"] = completedCheckinMessage(checkinStatus.TodayQuotaAwardedUSD)
-				if checkinStatus.TodayQuotaAwardedUSD != nil {
-					item["checkin_quota_awarded"] = *checkinStatus.TodayQuotaAwardedUSD
-				} else if storedCheckinAward != nil {
-					item["checkin_quota_awarded"] = *storedCheckinAward
-				}
-			}
-		}
-		if snapshot, ok := store.Snapshot(id, "subscriptions"); ok {
-			var data struct {
-				AccountID string          `json:"account_id"`
-				Data      json.RawMessage `json:"-"`
-			}
-			if json.Unmarshal(snapshot.Data, &data) == nil && data.AccountID == id {
-				item["subscription_snapshot"] = map[string]interface{}{"data": json.RawMessage(snapshot.Data), "queried_at": snapshot.QueriedAt}
-			}
-		}
-		if snapshot, ok := store.Snapshot(id, "draw-count"); ok {
-			var data service.DrawCountReport
-			if json.Unmarshal(snapshot.Data, &data) == nil && data.AccountID == id {
-				item["draw_count_snapshot"] = map[string]interface{}{"data": json.RawMessage(snapshot.Data), "queried_at": snapshot.QueriedAt}
-			}
-		}
-		if snapshot, ok := store.Snapshot(id, "activity"); ok {
-			var data service.ActivityReport
-			if json.Unmarshal(snapshot.Data, &data) == nil && data.AccountID == id {
-				item["activity_snapshot"] = map[string]interface{}{"data": json.RawMessage(snapshot.Data), "queried_at": snapshot.QueriedAt}
-			}
-		}
-		accounts = append(accounts, item)
-	}
-	writeJSON(writer, http.StatusOK, map[string]interface{}{"accounts": accounts})
-}
 
-func (s *Server) handleAccountAction(writer http.ResponseWriter, request *http.Request) {
-	parts := strings.Split(strings.Trim(request.URL.Path, "/"), "/")
-	if len(parts) != 4 || parts[0] != "api" || parts[1] != "accounts" || parts[2] == "" {
-		writeError(writer, http.StatusNotFound, "操作不存在")
-		return
-	}
-	action := parts[3]
-	switch action {
-	case "checkin", "claim", "draw", "activity", "purchase-draw", "unlock-pass":
-	default:
-		writeError(writer, http.StatusNotFound, "操作不存在")
-		return
-	}
-	if request.Method != http.MethodPost {
-		writeError(writer, http.StatusMethodNotAllowed, "请求方法不支持")
-		return
-	}
-	accountID := parts[2]
-	if _, ok := s.cfg.Accounts[accountID]; !ok {
-		writeError(writer, http.StatusNotFound, "账号不存在")
-		return
-	}
-	switch action {
-	case "checkin":
-		s.handleCheckinAction(writer, request, accountID)
-	case "claim":
-		s.handleClaimAction(writer, request, accountID)
-	case "draw":
-		s.handleDrawAction(writer, request, accountID)
-	case "activity":
-		s.handleActivityAction(writer, request, accountID)
-	case "purchase-draw":
-		s.handlePurchaseDrawAction(writer, request, accountID)
-	case "unlock-pass":
-		s.handleUnlockPassAction(writer, request, accountID)
-	}
-}
 
-func (s *Server) handleCheckinAction(writer http.ResponseWriter, request *http.Request, accountID string) {
-	ctx, cancel := context.WithTimeout(request.Context(), 2*time.Minute)
-	defer cancel()
-	store, err := s.sharedStore()
-	if err != nil {
-		writeStoreError(writer, err)
-		return
-	}
-	runner, err := s.runnerFor(store)
-	if err != nil {
-		writeStoreError(writer, err)
-		return
-	}
-	outcome, err := runner.Checkin(ctx, accountID)
-	if err != nil {
-		writeUpstreamError(writer, "checkin", accountID, err, "签到暂时失败，请稍后重试")
-		return
-	}
-	award := outcome.Action.CheckinQuotaAwardedUSD
-	checkinMessage := outcome.Action.Message
-	if outcome.Action.Status == state.ActionCompleted {
-		if status, statusErr := runner.CheckinStatus(ctx, accountID); statusErr == nil {
-			if status.CheckedInToday {
-				if err := s.markCheckinCompleted(store, accountID, time.Now().In(shanghaiLocation).Format("2006-01-02"), status); err != nil {
-					writeStoreError(writer, err)
-					return
-				}
-				if status.TodayQuotaAwardedUSD != nil {
-					award = status.TodayQuotaAwardedUSD
-				}
-			}
-		}
-		if award != nil {
-			checkinMessage = completedCheckinMessage(award)
-		}
-	}
-	writeJSON(writer, http.StatusOK, map[string]interface{}{
-		"account_id":            accountID,
-		"checkin_status":        outcome.Action.Status,
-		"checkin_message":       checkinMessage,
-		"checkin_quota_awarded": award,
-		"already_completed":     outcome.AlreadyRecorded && outcome.Action.Status == state.ActionCompleted,
-	})
-}
 
-func (s *Server) handleClaimAction(writer http.ResponseWriter, request *http.Request, accountID string) {
-	ctx, cancel := context.WithTimeout(request.Context(), 2*time.Minute)
-	defer cancel()
-	store, err := s.sharedStore()
-	if err != nil {
-		writeStoreError(writer, err)
-		return
-	}
-	runner, err := s.runnerFor(store)
-	if err != nil {
-		writeStoreError(writer, err)
-		return
-	}
-	outcome, err := runner.ClaimDaily(ctx, accountID)
-	if err != nil {
-		writeUpstreamError(writer, "claim", accountID, err, "领取每日抽奖暂时失败，请稍后重试")
-		return
-	}
-	response := struct {
-		AccountID        string `json:"account_id"`
-		ClaimStatus      string `json:"claim_status"`
-		ClaimMessage     string `json:"claim_message"`
-		AlreadyCompleted bool   `json:"already_completed"`
-		Added            int    `json:"added"`
-		Remaining        *int   `json:"remaining,omitempty"`
-	}{
-		AccountID:        accountID,
-		ClaimStatus:      string(outcome.Action.Status),
-		ClaimMessage:     publicClaimMessage(outcome.Action.Status, outcome.AlreadyRecorded && outcome.Action.Status == state.ActionCompleted),
-		AlreadyCompleted: outcome.AlreadyRecorded && outcome.Action.Status == state.ActionCompleted,
-		Added:            outcome.Added,
-		Remaining:        outcome.Remaining,
-	}
-	writeJSON(writer, http.StatusOK, response)
-}
 
-func (s *Server) handleDrawAction(writer http.ResponseWriter, request *http.Request, accountID string) {
-	ctx, cancel := context.WithTimeout(request.Context(), 2*time.Minute)
-	defer cancel()
-	store, err := s.sharedStore()
-	if err != nil {
-		writeStoreError(writer, err)
-		return
-	}
-	drawKey, err := webDrawKey()
-	if err != nil {
-		log.Printf("web draw key generation failed for account=%s: %v", accountID, err)
-		writeError(writer, http.StatusInternalServerError, "手动抽奖暂时不可用，请稍后重试")
-		return
-	}
-	runner, err := s.runnerFor(store)
-	if err != nil {
-		writeStoreError(writer, err)
-		return
-	}
-	outcome, err := runner.DrawAvailable(ctx, accountID, drawKey)
-	if err != nil {
-		writeUpstreamError(writer, "draw", accountID, err, "手动抽奖暂时失败，请稍后重试")
-		return
-	}
-	var prizeLabel string
-	if outcome.Result != nil {
-		prizeLabel = firstNonEmpty(outcome.Result.Prize.Label, outcome.Result.Prize.ShortLabel)
-	}
-	response := struct {
-		AccountID       string   `json:"account_id"`
-		Skipped         bool     `json:"skipped"`
-		RemainingBefore int      `json:"remaining_before"`
-		Message         string   `json:"message"`
-		PrizeLabel      string       `json:"prize_label,omitempty"`
-		QuotaDeltaUSD   *quota.Money `json:"quota_delta_usd,omitempty"`
-	}{
-		AccountID:       accountID,
-		Skipped:         outcome.Skipped,
-		RemainingBefore: outcome.RemainingBefore,
-		Message:         outcome.Message,
-		PrizeLabel:      prizeLabel,
-		QuotaDeltaUSD:   outcome.QuotaDeltaUSD,
-	}
-	writeJSON(writer, http.StatusOK, response)
-}
 
-func (s *Server) handleActivityAction(writer http.ResponseWriter, request *http.Request, accountID string) {
-	ctx, cancel := context.WithTimeout(request.Context(), 90*time.Second)
-	defer cancel()
-	store, err := s.sharedStore()
-	if err != nil {
-		writeStoreError(writer, err)
-		return
-	}
-	runner, err := s.runnerFor(store)
-	if err != nil {
-		writeStoreError(writer, err)
-		return
-	}
-	report, err := runner.QueryActivity(ctx, accountID)
-	if err != nil {
-		writeUpstreamError(writer, "activity", accountID, err, "活动信息暂时刷新失败，请稍后重试")
-		return
-	}
-	writeJSON(writer, http.StatusOK, report)
-}
 
-func (s *Server) handlePurchaseDrawAction(writer http.ResponseWriter, request *http.Request, accountID string) {
-	s.handlePurchaseAction(writer, request, accountID, "purchase-draw", "购买抽奖次数暂时失败，请稍后重试", func(ctx context.Context, runner *service.Runner) (service.PurchaseOutcome, error) {
-		return runner.PurchaseDraw(ctx, accountID)
-	})
-}
 
-func (s *Server) handleUnlockPassAction(writer http.ResponseWriter, request *http.Request, accountID string) {
-	s.handlePurchaseAction(writer, request, accountID, "unlock-pass", "购买通行证暂时失败，请稍后重试", func(ctx context.Context, runner *service.Runner) (service.PurchaseOutcome, error) {
-		return runner.UnlockDailyPass(ctx, accountID)
-	})
-}
-
-func (s *Server) handlePurchaseAction(writer http.ResponseWriter, request *http.Request, accountID, action, fallback string, run func(context.Context, *service.Runner) (service.PurchaseOutcome, error)) {
-	ctx, cancel := context.WithTimeout(request.Context(), 2*time.Minute)
-	defer cancel()
-	store, err := s.sharedStore()
-	if err != nil {
-		writeStoreError(writer, err)
-		return
-	}
-	runner, err := s.runnerFor(store)
-	if err != nil {
-		writeStoreError(writer, err)
-		return
-	}
-	outcome, err := run(ctx, runner)
-	if err != nil {
-		writeUpstreamError(writer, action, accountID, err, fallback)
-		return
-	}
-	response := struct {
-		AccountID string                  `json:"account_id"`
-		Status    string                  `json:"status"`
-		Message   string                  `json:"message"`
-		PriceUSD  *quota.Money            `json:"price_usd,omitempty"`
-		Remaining *int                    `json:"remaining,omitempty"`
-		Activity  *service.ActivityReport `json:"activity,omitempty"`
-	}{
-		AccountID: accountID,
-		Status:    outcome.Status,
-		Message:   outcome.Message,
-		PriceUSD:  outcome.PriceUSD,
-		Remaining: outcome.Remaining,
-		Activity:  outcome.Activity,
-	}
-	writeJSON(writer, http.StatusOK, response)
-}
 
 func (s *Server) handleDrawCountQuery(writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodPost {
@@ -687,7 +418,10 @@ func (s *Server) handleDrawCountQuery(writer http.ResponseWriter, request *http.
 		writeError(writer, http.StatusBadRequest, "抽奖次数查询需要指定一个账号")
 		return
 	}
-	if _, ok := s.cfg.Accounts[input.AccountID]; !ok {
+	if store, err := s.sharedStore(); err != nil {
+		writeStoreError(writer, err)
+		return
+	} else if err := requireKnownAccount(store, input.AccountID); err != nil {
 		writeError(writer, http.StatusNotFound, "账号不存在")
 		return
 	}
@@ -738,7 +472,10 @@ func (s *Server) handleSubscriptionQuery(writer http.ResponseWriter, request *ht
 		writeError(writer, http.StatusBadRequest, "订阅查询需要指定一个账号")
 		return
 	}
-	if _, ok := s.cfg.Accounts[input.AccountID]; !ok {
+	if store, err := s.sharedStore(); err != nil {
+		writeStoreError(writer, err)
+		return
+	} else if err := requireKnownAccount(store, input.AccountID); err != nil {
 		writeError(writer, http.StatusNotFound, "账号不存在")
 		return
 	}
@@ -792,83 +529,11 @@ func singleSubscriptionView(accountID string, report service.SubscriptionReport)
 	}
 }
 
-func (s *Server) markCheckinCompleted(store *state.Store, accountID, today string, status service.CheckinStatusReport) error {
-	action, _, err := store.GetOrCreateAction(accountID, today, state.ActionCheckin)
-	if err != nil {
-		return err
-	}
-	_, err = store.UpdateAction(action.Key, func(value *state.Action) {
-		value.Status = state.ActionCompleted
-		value.Retryable = false
-		value.SideEffectStarted = true
-		value.LastError = ""
-		if status.TodayQuotaAwardedUSD != nil {
-			award := *status.TodayQuotaAwardedUSD
-			value.CheckinQuotaAwardedUSD = &award
-		}
-		if status.TodayQuotaAwardedUSD != nil || value.CheckinQuotaAwardedUSD == nil {
-			value.Message = completedCheckinMessage(status.TodayQuotaAwardedUSD)
-		}
-	})
-	return err
-}
 
-func completedCheckinMessage(award *quota.Money) string {
-	if award == nil {
-		return "今日已签到"
-	}
-	if award.State != quota.StateConfirmed {
-		return "今日已签到，获得额度待确认"
-	}
-	return fmt.Sprintf("今日已签到，获得额度：%s", award.Display)
-}
 
-func claimAdded(action state.Action) int {
-	if action.ClaimBeforeRemaining == nil || action.ClaimAfterRemaining == nil {
-		return 0
-	}
-	added := *action.ClaimAfterRemaining - *action.ClaimBeforeRemaining
-	if added < 0 {
-		return 0
-	}
-	return added
-}
 
-func claimRemaining(action state.Action) (int, bool) {
-	if action.ClaimAfterRemaining != nil {
-		return *action.ClaimAfterRemaining, true
-	}
-	if action.ClaimBeforeRemaining != nil {
-		return *action.ClaimBeforeRemaining, true
-	}
-	return 0, false
-}
 
-func publicClaimMessage(status state.ActionStatus, alreadyCompleted bool) string {
-	switch status {
-	case state.ActionCompleted:
-		if alreadyCompleted {
-			return "今日已领取"
-		}
-		return "领取成功"
-	case state.ActionFailed:
-		return "领取失败，请重试"
-	case state.ActionUnknown:
-		return "领取结果待确认"
-	case state.ActionPending:
-		return "领取处理中"
-	default:
-		return "领取处理中"
-	}
-}
 
-func webDrawKey() (string, error) {
-	buffer := make([]byte, 16)
-	if _, err := rand.Read(buffer); err != nil {
-		return "", err
-	}
-	return "draw:web:" + hex.EncodeToString(buffer), nil
-}
 
 func writeUpstreamError(writer http.ResponseWriter, action, accountID string, err error, message string) {
 	log.Printf("web %s failed for account=%s: %v", action, accountID, err)
@@ -934,4 +599,13 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+
+// requireKnownAccount checks the registry before any upstream query.
+func requireKnownAccount(store *state.Store, accountID string) error {
+	if _, err := store.AccountRegistry().Get(strings.TrimSpace(accountID)); err != nil {
+		return err
+	}
+	return nil
 }

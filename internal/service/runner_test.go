@@ -2542,14 +2542,7 @@ func vaultCookiesToLegacy(values []secret.Cookie) []state.Cookie {
 
 func testRunner(t *testing.T, store *state.Store, client *fakeClient, now time.Time) *Runner {
 	t.Helper()
-	cfg := config.Config{
-		Accounts: map[string]config.Account{
-			"account-a": {ID: "account-a", Label: "账号 A", Username: "a", Password: "password"},
-			"account-b": {ID: "account-b", Label: "账号 B", Username: "b", Password: "password"},
-			"account-c": {ID: "account-c", Label: "账号 C", Username: "c", Password: "password"},
-			"account-d": {ID: "account-d", Label: "账号 D", Username: "d", Password: "password"},
-		},
-	}
+	cfg := config.Config{BaseURL: "https://unit.test"}
 	repo := store.AccountRegistry()
 	for _, id := range []string{"account-a", "account-b", "account-c", "account-d"} {
 		if _, err := repo.Create(account.Record{ID: id, Label: id, MaskedLoginName: "t***@example.test", Status: account.StatusEnabled}); err != nil {

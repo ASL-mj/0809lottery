@@ -527,7 +527,7 @@ Expected: pass.
 - Modify: `internal/web/server.go`
 - Modify: `internal/web/server_test.go`
 
-- [ ] **Step 1: Write handler tests before routing changes**
+- [x] **Step 1: Write handler tests before routing changes**
 
 Cover Basic Auth, CSRF, same-origin, create/edit/credentials, validate, explicit reauthentication, unsupported preview, delete, disabled action and secret redaction:
 
@@ -540,7 +540,7 @@ func TestCreateAccountNeverReturnsCredentials(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the red web tests**
+- [x] **Step 2: Run the red web tests**
 
 Run:
 
@@ -550,19 +550,19 @@ go test ./internal/web -run 'Account|CSRF|SessionPreview' -count=1
 
 Expected: fail because routes and middleware are absent.
 
-- [ ] **Step 3: Split account handlers from server bootstrap**
+- [x] **Step 3: Split account handlers from server bootstrap**
 
 Move account-list and account-action routing from `server.go` into `accounts.go`. Keep `Server` as composition root for Store, Repository, Vault, Broker and Scheduler. Preserve all existing business endpoint paths.
 
-- [ ] **Step 4: Add CSRF and explicit DTOs**
+- [x] **Step 4: Add CSRF and explicit DTOs**
 
 Set a random same-site CSRF cookie on `GET /`; require matching `X-CSRF-Token` plus same-origin `Origin` or `Referer` for POST/PATCH/PUT/DELETE. Limit credential request bodies to 8 KiB. Serialize explicit response structs only; never marshal Vault, platform client or domain secrets.
 
-- [ ] **Step 5: Implement management routes**
+- [x] **Step 5: Implement management routes**
 
 Wire CRUD to Repository/Vault, validation to Broker with `ReadOnly`, reauthentication to Broker with `ExplicitReauthenticate`, and cleanup preview to the capability manager. Delete requires `confirmation == "DELETE"`, disables first, then removes only the selected account's state.
 
-- [ ] **Step 6: Verify web tests**
+- [x] **Step 6: Verify web tests**
 
 Run:
 

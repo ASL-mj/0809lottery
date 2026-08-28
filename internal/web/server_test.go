@@ -28,13 +28,11 @@ func testServer(t *testing.T) *Server {
 		StatePath: filepath.Join(t.TempDir(), "data", "state.json"),
 		WebUser:   "admin",
 		WebPass:   "secret",
-		Accounts: map[string]config.Account{
-			"account-a": {ID: "account-a", Label: "账号一", Username: "a@example.com", Password: "do-not-return"},
-		},
 	})
 	server.vaultFactory = func(store *state.Store) (secret.Vault, error) {
 		return testStoreVault{store: store}, nil
 	}
+	server.csrf = testCSRFToken
 	// Seed the dynamic account registry to mirror a migrated deployment.
 	store, err := state.Open(server.cfg.StatePath)
 	if err != nil {
@@ -87,7 +85,9 @@ func (v testStoreVault) Save(_ context.Context, accountID string, bundle secret.
 	})
 }
 
-func (v testStoreVault) Delete(context.Context, string) error { return nil }
+func (v testStoreVault) Delete(_ context.Context, accountID string) error {
+	return v.store.PutAuth(accountID, state.AuthState{})
+}
 
 func testCookiesToVault(values []state.Cookie) []secret.Cookie {
 	if len(values) == 0 {
@@ -117,9 +117,18 @@ func testCookiesToState(values []secret.Cookie) []state.Cookie {
 	return cookies
 }
 
+const testCSRFToken = "test-csrf-token"
+
 func authenticatedRequest(method, target string, body io.Reader) *http.Request {
 	request := httptest.NewRequest(method, target, body)
 	request.SetBasicAuth("admin", "secret")
+	request.Header.Set("Origin", "http://workbench.test")
+	request.Host = "workbench.test"
+	switch method {
+	case http.MethodPost, http.MethodPatch, http.MethodPut, http.MethodDelete:
+		request.Header.Set("X-CSRF-Token", testCSRFToken)
+	}
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: testCSRFToken})
 	return request
 }
 

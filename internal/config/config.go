@@ -49,10 +49,6 @@ type Config struct {
 	// live in the account registry and the encrypted vault.
 	LegacyAccounts map[string]Account
 
-	// Deprecated transition field for pre-registry service/web readers. It is
-	// never populated by LoadFrom and is removed when the runners migrate to
-	// the account repository.
-	Accounts map[string]Account
 }
 
 func Load() (Config, error) {
