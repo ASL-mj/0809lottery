@@ -396,9 +396,6 @@
       const meta = [result.unlocked ? '今日已解锁' : '', result.queried_at ? `更新于 ${formatTime(result.queried_at)}` : ''].filter(Boolean).join(' · ');
       return `<section class="draw-section"><div class="section-head"><h3 class="section-title">抽奖次数</h3>${meta ? `<span class="section-meta">${escapeHTML(meta)}</span>` : ''}</div><div class="metrics"><div class="metric"><div class="metric__label">当前可抽</div><div class="metric__value">${remaining}<span class="metric__unit">次</span></div></div><div class="metric"><div class="metric__label">已锁定</div><div class="metric__value">${locked}<span class="metric__unit">次</span></div></div><div class="metric"><div class="metric__label">今日已用</div><div class="metric__value">${used}/${limit}<span class="metric__unit">次</span></div></div></div></section>`;
     }
-    function formatUSD(value) {
-      return value == null || Number.isNaN(Number(value)) ? '$--' : `$${Number(value).toFixed(2)}`;
-    }
     function purchaseBusy(account, activity) {
       return account.querying_activity || account.purchasing_draw || account.unlocking_pass || toNumber(activity?.purchase_pending) > 0 || toNumber(activity?.purchase_unknown) > 0;
     }
