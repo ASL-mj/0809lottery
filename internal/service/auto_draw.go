@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"log"
 	"math/big"
-	"sort"
 	"strings"
 	"time"
 
+	"skyeapi/lottery-bot/internal/account"
 	"skyeapi/lottery-bot/internal/auth"
 	"skyeapi/lottery-bot/internal/config"
 	"skyeapi/lottery-bot/internal/lottery"
@@ -46,7 +46,7 @@ type AutoDrawExecutor func(context.Context, string, string) (DrawAvailableOutcom
 // process restart without creating a second draw request.
 type AutoDrawScheduler struct {
 	store            *state.Store
-	accounts         []config.Account
+	repo             account.Repository
 	now              func() time.Time
 	randomOffset     func(int) (int, error)
 	draw             AutoDrawExecutor
@@ -55,15 +55,10 @@ type AutoDrawScheduler struct {
 }
 
 func NewAutoDrawScheduler(cfg config.Config, store *state.Store, broker *auth.Broker) *AutoDrawScheduler {
-	accounts := make([]config.Account, 0, len(cfg.Accounts))
-	for _, account := range cfg.Accounts {
-		accounts = append(accounts, account)
-	}
-	sort.Slice(accounts, func(i, j int) bool { return accounts[i].ID < accounts[j].ID })
-	runner := NewRunner(cfg, store, broker)
+	runner := NewRunner(cfg, store, store.AccountRegistry(), broker)
 	return &AutoDrawScheduler{
 		store:            store,
-		accounts:         accounts,
+		repo:             store.AccountRegistry(),
 		now:              time.Now,
 		randomOffset:     randomSecondOffset,
 		draw:             runner.DrawAvailableScheduled,
@@ -145,14 +140,18 @@ func (s *AutoDrawScheduler) Tick(ctx context.Context) error {
 }
 
 func (s *AutoDrawScheduler) ensurePlans(date string, now time.Time) ([]state.AutoDrawPlan, error) {
+	enabled, err := s.repo.ListEnabled()
+	if err != nil {
+		return nil, fmt.Errorf("list enabled accounts: %w", err)
+	}
 	existing := s.store.AutoDrawPlans(date)
 	existingByAccountWindow := make(map[string]state.AutoDrawPlan, len(existing))
 	for _, plan := range existing {
 		existingByAccountWindow[plan.AccountID+"\x00"+plan.WindowID] = plan
 	}
-	missing := make([]state.AutoDrawPlan, 0, len(s.accounts)*len(autoDrawWindows))
-	for _, account := range s.accounts {
-		accountID := strings.TrimSpace(account.ID)
+	missing := make([]state.AutoDrawPlan, 0, len(enabled)*len(autoDrawWindows))
+	for _, record := range enabled {
+		accountID := strings.TrimSpace(record.ID)
 		if accountID == "" {
 			continue
 		}
@@ -196,6 +195,24 @@ func (s *AutoDrawScheduler) executePlan(parent context.Context, key string) erro
 	if !shouldExecute {
 		return nil
 	}
+	if record, recordErr := s.repo.Get(plan.AccountID); recordErr != nil || record.Status != account.StatusEnabled {
+		// The account disappeared or was disabled after planning; the window
+		// must not spend its draw opportunity nor touch authentication.
+		finished, finishErr := s.store.FinishAutoDrawPlan(key, state.AutoDrawPlanSkipped, "账号已停用或删除，跳过本次自动抽奖", "", nil, s.currentTime().UTC())
+		if finishErr != nil {
+			return fmt.Errorf("finish auto draw plan: %w", finishErr)
+		}
+		if _, err := s.store.AppendRuntimeLog(state.RuntimeLog{
+			OccurredAt: finished.ExecutedAt,
+			AccountID:  finished.AccountID,
+			WindowID:   finished.WindowID,
+			Status:     finished.Status,
+			Message:    finished.Message,
+		}); err != nil {
+			return fmt.Errorf("append auto draw runtime log: %w", err)
+		}
+		return nil
+	}
 
 	operationTimeout := s.operationTimeout
 	if operationTimeout <= 0 {
@@ -233,6 +250,9 @@ func (s *AutoDrawScheduler) executePlan(parent context.Context, key string) erro
 
 func autoDrawExecutionResult(outcome DrawAvailableOutcome, drawErr error) (state.AutoDrawPlanStatus, string, string, *float64) {
 	if drawErr != nil {
+		if errors.Is(drawErr, auth.ErrReauthRequired) {
+			return state.AutoDrawPlanSkipped, "登录状态失效，需要重新认证，已跳过本次自动抽奖", "", nil
+		}
 		return state.AutoDrawPlanFailed, autoDrawFailureMessage(drawErr), "", nil
 	}
 	if outcome.Skipped {

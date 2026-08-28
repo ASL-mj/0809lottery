@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"skyeapi/lottery-bot/internal/account"
 	"skyeapi/lottery-bot/internal/auth"
 	"skyeapi/lottery-bot/internal/config"
 	"skyeapi/lottery-bot/internal/lottery"
@@ -52,6 +53,7 @@ type session struct {
 type Runner struct {
 	config    config.Config
 	store     *state.Store
+	repo      account.Repository
 	broker    *auth.Broker
 	newClient ClientFactory
 	now       func() time.Time
@@ -68,16 +70,17 @@ type CheckinStatusReport struct {
 	TodayQuotaAwardedUSD *float64
 }
 
-func NewRunner(cfg config.Config, store *state.Store, broker *auth.Broker) *Runner {
-	return NewRunnerWithFactory(cfg, store, broker, func(cookies []state.Cookie) (WebsiteClient, error) {
+func NewRunner(cfg config.Config, store *state.Store, repo account.Repository, broker *auth.Broker) *Runner {
+	return NewRunnerWithFactory(cfg, store, repo, broker, func(cookies []state.Cookie) (WebsiteClient, error) {
 		return lottery.NewClient(cfg.BaseURL, cfg.UserAgent, cookies)
 	})
 }
 
-func NewRunnerWithFactory(cfg config.Config, store *state.Store, broker *auth.Broker, factory ClientFactory) *Runner {
+func NewRunnerWithFactory(cfg config.Config, store *state.Store, repo account.Repository, broker *auth.Broker, factory ClientFactory) *Runner {
 	return &Runner{
 		config:    cfg,
 		store:     store,
+		repo:      repo,
 		broker:    broker,
 		newClient: factory,
 		now:       time.Now,
@@ -559,12 +562,20 @@ func (r *Runner) today() string {
 	return r.now().In(shanghaiLocation).Format("2006-01-02")
 }
 
-func (r *Runner) account(id string) (config.Account, error) {
-	account, ok := r.config.Accounts[id]
-	if !ok {
-		return config.Account{}, fmt.Errorf("unknown account %q", id)
+// account resolves the registry record and refuses missing or disabled
+// accounts before any session is acquired.
+func (r *Runner) account(id string) (account.Record, error) {
+	record, err := r.repo.Get(strings.TrimSpace(id))
+	if errors.Is(err, account.ErrNotFound) {
+		return account.Record{}, fmt.Errorf("unknown account %q", id)
 	}
-	return account, nil
+	if err != nil {
+		return account.Record{}, err
+	}
+	if record.Status != account.StatusEnabled {
+		return account.Record{}, fmt.Errorf("账号已停用，无法执行该操作")
+	}
+	return record, nil
 }
 
 func isUnknown(err error) bool {

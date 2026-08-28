@@ -95,14 +95,17 @@ func (r *Runner) QuerySubscriptions(ctx context.Context, accountID string) (Subs
 func (r *Runner) subscriptionAccountIDs(value string) ([]string, error) {
 	value = strings.TrimSpace(value)
 	if value == "all" {
-		result := make([]string, 0, len(r.config.Accounts))
-		for id := range r.config.Accounts {
-			result = append(result, id)
+		records, err := r.repo.List()
+		if err != nil {
+			return nil, err
 		}
-		sort.Strings(result)
+		result := make([]string, 0, len(records))
+		for _, record := range records {
+			result = append(result, record.ID)
+		}
 		return result, nil
 	}
-	if _, ok := r.config.Accounts[value]; !ok {
+	if _, err := r.repo.Get(value); err != nil {
 		return nil, fmt.Errorf("unknown account %q", value)
 	}
 	return []string{value}, nil

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"skyeapi/lottery-bot/internal/account"
 	"skyeapi/lottery-bot/internal/auth"
 	"skyeapi/lottery-bot/internal/config"
 	"skyeapi/lottery-bot/internal/lottery"
@@ -2536,10 +2537,16 @@ func testRunner(t *testing.T, store *state.Store, client *fakeClient, now time.T
 			"account-d": {ID: "account-d", Label: "账号 D", Username: "d", Password: "password"},
 		},
 	}
+	repo := store.AccountRegistry()
+	for _, id := range []string{"account-a", "account-b", "account-c", "account-d"} {
+		if _, err := repo.Create(account.Record{ID: id, Label: id, MaskedLoginName: "t***@example.test", Status: account.StatusEnabled}); err != nil {
+			t.Fatalf("seed registry account %s: %v", id, err)
+		}
+	}
 	broker := auth.NewBroker(store, storeVault{store: store}, func([]state.Cookie) (auth.PlatformClient, error) {
 		return client, nil
 	}).WithClock(func() time.Time { return now })
-	runner := NewRunnerWithFactory(cfg, store, broker, func([]state.Cookie) (WebsiteClient, error) { return client, nil })
+	runner := NewRunnerWithFactory(cfg, store, repo, broker, func([]state.Cookie) (WebsiteClient, error) { return client, nil })
 	runner.now = func() time.Time { return now }
 	runner.wait = func(context.Context, time.Duration) error { return nil }
 	return runner

@@ -178,7 +178,7 @@ func (s *Server) runnerFor(store *state.Store) (*service.Runner, error) {
 	if err != nil {
 		return nil, err
 	}
-	return service.NewRunner(s.cfg, store, broker), nil
+	return service.NewRunner(s.cfg, store, store.AccountRegistry(), broker), nil
 }
 
 func (s *Server) Handler() http.Handler {

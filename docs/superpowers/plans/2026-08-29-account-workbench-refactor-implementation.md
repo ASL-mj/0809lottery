@@ -395,7 +395,7 @@ Expected: pass.
 - Modify: `internal/service/runner_test.go`
 - Modify: `internal/service/auto_draw_test.go`
 
-- [ ] **Step 1: Add scheduler red tests for enabled state and auth failure**
+- [x] **Step 1: Add scheduler red tests for enabled state and auth failure**
 
 ```go
 func TestSchedulerPlansOnlyEnabledAccounts(t *testing.T) {}
@@ -404,7 +404,7 @@ func TestSchedulerSkipsReauthRequiredWithoutLogin(t *testing.T) {}
 
 Expected behavior: only enabled account IDs receive plans; `AuthReauthRequired` produces a persisted skipped plan with no fake `Login` call.
 
-- [ ] **Step 2: Run the red tests**
+- [x] **Step 2: Run the red tests**
 
 Run:
 
@@ -414,15 +414,15 @@ go test ./internal/service -run 'DynamicAccount|Scheduler.*Reauth' -count=1
 
 Expected: fail because scheduler still captures `cfg.Accounts`.
 
-- [ ] **Step 3: Resolve accounts through Repository**
+- [x] **Step 3: Resolve accounts through Repository**
 
 Change Runner construction to take `account.Repository` and `auth.Broker`. Every action rejects missing/disabled accounts before acquiring a session. Preserve existing per-account action locks and persisted idempotency records.
 
-- [ ] **Step 4: Refactor AutoDrawScheduler**
+- [x] **Step 4: Refactor AutoDrawScheduler**
 
 Use `repository.ListEnabled()` inside `ensurePlans` rather than a fixed account slice. Skip a persisted plan if its account becomes disabled/deleted. Execute through `ScheduledAutomation`; map `AuthReauthRequired` to the safe skipped message and do not retry or log in.
 
-- [ ] **Step 5: Verify all service regressions**
+- [x] **Step 5: Verify all service regressions**
 
 Run:
 

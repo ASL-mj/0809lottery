@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"skyeapi/lottery-bot/internal/account"
 	"skyeapi/lottery-bot/internal/config"
 	"skyeapi/lottery-bot/internal/secret"
 	"skyeapi/lottery-bot/internal/service"
@@ -33,6 +34,20 @@ func testServer(t *testing.T) *Server {
 	server.vaultFactory = func(store *state.Store) (secret.Vault, error) {
 		return testStoreVault{store: store}, nil
 	}
+	// Seed the dynamic account registry to mirror a migrated deployment.
+	store, err := state.Open(server.cfg.StatePath)
+	if err != nil {
+		t.Fatalf("seed registry store: %v", err)
+	}
+	if _, err := store.AccountRegistry().Create(account.Record{
+		ID:              "account-a",
+		Label:           "账号一",
+		MaskedLoginName: "a***@example.com",
+		Status:          account.StatusEnabled,
+	}); err != nil {
+		t.Fatalf("seed registry account: %v", err)
+	}
+	_ = store.Close()
 	t.Cleanup(func() {
 		_ = server.Close()
 	})

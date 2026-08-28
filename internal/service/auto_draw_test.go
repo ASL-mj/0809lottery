@@ -3,11 +3,14 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"skyeapi/lottery-bot/internal/account"
+	"skyeapi/lottery-bot/internal/auth"
 	"skyeapi/lottery-bot/internal/config"
 	"skyeapi/lottery-bot/internal/lottery"
 	"skyeapi/lottery-bot/internal/state"
@@ -267,14 +270,18 @@ func openAutoDrawTestStore(t *testing.T) *state.Store {
 }
 
 func newAutoDrawTestScheduler(store *state.Store, accountIDs []string, now *time.Time, offsets []int, draw AutoDrawExecutor) *AutoDrawScheduler {
-	accounts := make([]config.Account, 0, len(accountIDs))
+	registry := store.AccountRegistry()
 	for _, accountID := range accountIDs {
-		accounts = append(accounts, config.Account{ID: accountID})
+		if _, err := registry.Create(account.Record{ID: accountID, Label: accountID, MaskedLoginName: "t***@example.test", Status: account.StatusEnabled}); err != nil {
+			if !strings.Contains(err.Error(), "already exists") {
+				panic(fmt.Sprintf("create test account %s: %v", accountID, err))
+			}
+		}
 	}
 	nextOffset := 0
 	return &AutoDrawScheduler{
 		store:    store,
-		accounts: accounts,
+		repo:     registry,
 		now: func() time.Time {
 			return *now
 		},
@@ -317,4 +324,58 @@ func autoDrawWindowByID(id string) (AutoDrawWindow, bool) {
 		}
 	}
 	return AutoDrawWindow{}, false
+}
+
+// Only enabled registry accounts may receive auto-draw plans.
+func TestSchedulerPlansOnlyEnabledAccounts(t *testing.T) {
+	store := openAutoDrawTestStore(t)
+	now := autoDrawTime(2026, time.August, 8, 7, 0, 0)
+	scheduler := newAutoDrawTestScheduler(store, []string{"account-a", "account-b"}, &now, []int{0, 0, 0, 0, 0, 0}, func(context.Context, string, string) (DrawAvailableOutcome, error) {
+		t.Fatal("no plan is due yet")
+		return DrawAvailableOutcome{}, nil
+	})
+
+	if _, err := scheduler.repo.Update(account.Record{ID: "account-b", Label: "account-b", MaskedLoginName: "t***@example.test", Status: account.StatusDisabled}); err != nil {
+		t.Fatalf("disable account-b: %v", err)
+	}
+	if err := scheduler.Tick(context.Background()); err != nil {
+		t.Fatalf("Tick() error = %v", err)
+	}
+	for _, plan := range store.AutoDrawPlans(now.Format("2006-01-02")) {
+		if plan.AccountID == "account-b" {
+			t.Fatalf("disabled account received a plan: %#v", plan)
+		}
+	}
+}
+
+// A reauth-required account must produce a persisted skipped plan without any
+// login attempt.
+func TestSchedulerSkipsReauthRequiredWithoutLogin(t *testing.T) {
+	store := openAutoDrawTestStore(t)
+	now := autoDrawTime(2026, time.August, 8, 13, 5, 0)
+	client := &fakeClient{
+		login:       lottery.LoginResult{UserID: 1, AccessToken: "implicit-session", AccessExpiresAt: now.Add(time.Hour).UTC()},
+		refreshErrs: []error{&lottery.APIError{StatusCode: 401}},
+	}
+	broker := auth.NewBroker(store, storeVault{store: store}, func([]state.Cookie) (auth.PlatformClient, error) {
+		return client, nil
+	}).WithClock(func() time.Time { return now.UTC() })
+	runner := NewRunner(config.Config{BaseURL: "https://unit.test"}, store, store.AccountRegistry(), broker)
+	scheduler := newAutoDrawTestScheduler(store, []string{"account-a"}, &now, []int{0, 0, 0}, func(ctx context.Context, accountID, key string) (DrawAvailableOutcome, error) {
+		return runner.DrawAvailableScheduled(ctx, accountID, key)
+	})
+
+	if err := scheduler.Tick(context.Background()); err != nil {
+		t.Fatalf("Tick() error = %v", err)
+	}
+	plan := findAutoDrawPlan(t, store, now.Format("2006-01-02"), "account-a", "afternoon")
+	if plan.Status != state.AutoDrawPlanSkipped {
+		t.Fatalf("plan status = %s, want skipped", plan.Status)
+	}
+	if !strings.Contains(plan.Message, "重新认证") {
+		t.Fatalf("skip message must demand reauthentication: %q", plan.Message)
+	}
+	if client.loginCalls != 0 {
+		t.Fatalf("scheduler logged in %d times", client.loginCalls)
+	}
 }
