@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"skyeapi/lottery-bot/internal/config"
+	"skyeapi/lottery-bot/internal/secret"
 	"skyeapi/lottery-bot/internal/service"
 	"skyeapi/lottery-bot/internal/state"
 )
@@ -29,10 +30,75 @@ func testServer(t *testing.T) *Server {
 			"account-a": {ID: "account-a", Label: "账号一", Username: "a@example.com", Password: "do-not-return"},
 		},
 	})
+	server.vaultFactory = func(store *state.Store) (secret.Vault, error) {
+		return testStoreVault{store: store}, nil
+	}
 	t.Cleanup(func() {
 		_ = server.Close()
 	})
 	return server
+}
+
+// testStoreVault bridges the vault API onto the legacy persisted auth state
+// so existing fixtures keep seeding tokens through store.PutAuth.
+type testStoreVault struct {
+	store *state.Store
+}
+
+func (v testStoreVault) Load(_ context.Context, accountID string) (secret.Bundle, error) {
+	authState := v.store.Auth(accountID)
+	if authState.UserID == 0 && authState.ParentAccessToken == "" && authState.LotteryAccessToken == "" && len(authState.Cookies) == 0 {
+		return secret.Bundle{}, secret.ErrNotFound
+	}
+	return secret.Bundle{
+		UserID:                 authState.UserID,
+		ParentAccessToken:      authState.ParentAccessToken,
+		ParentAccessExpiresAt:  authState.ParentAccessExpiresAt,
+		LotteryAccessToken:     authState.LotteryAccessToken,
+		LotteryAccessExpiresAt: authState.LotteryAccessExpiresAt,
+		Cookies:                testCookiesToVault(authState.Cookies),
+	}, nil
+}
+
+func (v testStoreVault) Save(_ context.Context, accountID string, bundle secret.Bundle) error {
+	return v.store.PutAuth(accountID, state.AuthState{
+		UserID:                 bundle.UserID,
+		ParentAccessToken:      bundle.ParentAccessToken,
+		ParentAccessExpiresAt:  bundle.ParentAccessExpiresAt,
+		LotteryAccessToken:     bundle.LotteryAccessToken,
+		LotteryAccessExpiresAt: bundle.LotteryAccessExpiresAt,
+		Cookies:                testCookiesToState(bundle.Cookies),
+	})
+}
+
+func (v testStoreVault) Delete(context.Context, string) error { return nil }
+
+func testCookiesToVault(values []state.Cookie) []secret.Cookie {
+	if len(values) == 0 {
+		return nil
+	}
+	cookies := make([]secret.Cookie, 0, len(values))
+	for _, value := range values {
+		cookies = append(cookies, secret.Cookie{
+			Name: value.Name, Value: value.Value, Path: value.Path,
+			Domain: value.Domain, Expires: value.Expires, Secure: value.Secure, HTTPOnly: value.HTTPOnly,
+		})
+	}
+	return cookies
+}
+
+func testCookiesToState(values []secret.Cookie) []state.Cookie {
+	if len(values) == 0 {
+		return nil
+	}
+	cookies := make([]state.Cookie, 0, len(values))
+	for _, value := range values {
+		cookies = append(cookies, state.Cookie{
+			Name: value.Name, Value: value.Value, Path: value.Path,
+			Domain: value.Domain, Expires: value.Expires, Secure: value.Secure, HTTPOnly: value.HTTPOnly,
+		})
+	}
+	return cookies
 }
 
 func authenticatedRequest(method, target string, body io.Reader) *http.Request {

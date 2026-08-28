@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -14,8 +13,10 @@ import (
 	"testing"
 	"time"
 
+	"skyeapi/lottery-bot/internal/auth"
 	"skyeapi/lottery-bot/internal/config"
 	"skyeapi/lottery-bot/internal/lottery"
+	"skyeapi/lottery-bot/internal/secret"
 	"skyeapi/lottery-bot/internal/state"
 )
 
@@ -82,7 +83,7 @@ type fakeClient struct {
 	claimRelease            <-chan struct{}
 }
 
-func (f *fakeClient) Login(_ context.Context, _ config.Account) (lottery.LoginResult, error) {
+func (f *fakeClient) Login(_ context.Context, _ lottery.Credentials) (lottery.LoginResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.loginCalls++
@@ -467,7 +468,7 @@ func TestQuerySubscriptionsFiltersAndAggregatesActiveSubscriptions(t *testing.T)
 	}
 }
 
-func TestQuerySubscriptionsRefreshesUnavailableSavedSession(t *testing.T) {
+func TestQuerySubscriptionsRequiresReauthWhenRefreshRejected(t *testing.T) {
 	store := testStore(t)
 	defer store.Close()
 	now := time.Date(2026, time.August, 5, 10, 0, 0, 0, shanghaiLocation)
@@ -479,7 +480,6 @@ func TestQuerySubscriptionsRefreshesUnavailableSavedSession(t *testing.T) {
 		t.Fatalf("PutAuth() error = %v", err)
 	}
 	client := &fakeClient{
-		login:             lottery.LoginResult{UserID: 1, AccessToken: "fresh-parent-token", AccessExpiresAt: now.Add(time.Hour)},
 		userSelfErrs:      []error{&lottery.APIError{StatusCode: http.StatusUnauthorized}},
 		subscriptionPlans: map[int]string{7: "高级订阅"},
 		subscriptionSelf: lottery.SubscriptionSelf{Subscriptions: []lottery.SubscriptionSummary{
@@ -492,164 +492,14 @@ func TestQuerySubscriptionsRefreshesUnavailableSavedSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QuerySubscriptions() error = %v", err)
 	}
-	if len(report.Accounts) != 1 || report.Accounts[0].QueryError != "" || len(report.Accounts[0].Subscriptions) != 1 {
-		t.Fatalf("QuerySubscriptions() = %#v, want a refreshed subscription result", report)
+	if len(report.Accounts) != 1 || report.Accounts[0].QueryError == "" {
+		t.Fatalf("QuerySubscriptions() = %#v, want a reauthentication query error", report)
 	}
-	if client.refreshCalls != 1 || client.loginCalls != 1 {
-		t.Fatalf("subscription query refresh/login calls = %d/%d, want 1/1", client.refreshCalls, client.loginCalls)
-	}
-	auth := store.Auth("account-a")
-	if auth.ParentAccessToken != "fresh-parent-token" {
-		t.Fatal("subscription query did not persist refreshed parent token")
-	}
-}
-
-func TestEnsureParentTokenValidatesExpiredTokenBeforeLogin(t *testing.T) {
-	store := testStore(t)
-	defer store.Close()
-	now := time.Date(2026, time.August, 5, 10, 0, 0, 0, shanghaiLocation)
-	if err := store.PutAuth("account-a", state.AuthState{
-		UserID:                1,
-		ParentAccessToken:     "server-still-valid",
-		ParentAccessExpiresAt: now.Add(-time.Minute),
-	}); err != nil {
-		t.Fatalf("PutAuth() error = %v", err)
-	}
-	client := &fakeClient{}
-	runner := testRunner(t, store, client, now)
-
-	auth, token, err := runner.ensureParentToken(context.Background(), client, config.Account{ID: "account-a"}, store.Auth("account-a"))
-	if err != nil {
-		t.Fatalf("ensureParentToken() error = %v", err)
-	}
-	if token != "server-still-valid" || auth.ParentAccessToken != "server-still-valid" {
-		t.Fatalf("ensureParentToken() token = %q, auth = %#v", token, auth)
-	}
-	if client.userSelfCalls != 1 || client.refreshCalls != 0 || client.loginCalls != 0 {
-		t.Fatalf("authentication calls = self:%d refresh:%d login:%d, want 1/0/0", client.userSelfCalls, client.refreshCalls, client.loginCalls)
-	}
-}
-
-func TestEnsureParentTokenRefreshesBeforePasswordLogin(t *testing.T) {
-	store := testStore(t)
-	defer store.Close()
-	now := time.Date(2026, time.August, 5, 10, 0, 0, 0, shanghaiLocation)
-	if err := store.PutAuth("account-a", state.AuthState{
-		UserID:                1,
-		ParentAccessToken:     "server-expired",
-		ParentAccessExpiresAt: now.Add(-time.Minute),
-	}); err != nil {
-		t.Fatalf("PutAuth() error = %v", err)
-	}
-	client := &fakeClient{
-		userSelfErrs: []error{&lottery.APIError{StatusCode: http.StatusUnauthorized}},
-		refresh: lottery.LoginResult{
-			UserID:          1,
-			AccessToken:     "cookie-refreshed",
-			AccessExpiresAt: now.Add(time.Hour),
-		},
-		login: lottery.LoginResult{UserID: 1, AccessToken: "must-not-login", AccessExpiresAt: now.Add(time.Hour)},
-	}
-	runner := testRunner(t, store, client, now)
-
-	auth, token, err := runner.ensureParentToken(context.Background(), client, config.Account{ID: "account-a"}, store.Auth("account-a"))
-	if err != nil {
-		t.Fatalf("ensureParentToken() error = %v", err)
-	}
-	if token != "cookie-refreshed" || auth.ParentAccessToken != "cookie-refreshed" {
-		t.Fatalf("ensureParentToken() token = %q, auth = %#v", token, auth)
-	}
-	if client.userSelfCalls != 1 || client.refreshCalls != 1 || client.loginCalls != 0 {
-		t.Fatalf("authentication calls = self:%d refresh:%d login:%d, want 1/1/0", client.userSelfCalls, client.refreshCalls, client.loginCalls)
-	}
-}
-
-func TestEnsureParentTokenDoesNotLoginAfterTransientRefreshFailure(t *testing.T) {
-	store := testStore(t)
-	defer store.Close()
-	now := time.Date(2026, time.August, 5, 10, 0, 0, 0, shanghaiLocation)
-	if err := store.PutAuth("account-a", state.AuthState{
-		UserID:                1,
-		ParentAccessToken:     "server-expired",
-		ParentAccessExpiresAt: now.Add(-time.Minute),
-	}); err != nil {
-		t.Fatalf("PutAuth() error = %v", err)
-	}
-	client := &fakeClient{
-		userSelfErrs: []error{&lottery.APIError{StatusCode: http.StatusUnauthorized}},
-		refreshErrs:  []error{&lottery.APIError{StatusCode: http.StatusServiceUnavailable}},
-		login:        lottery.LoginResult{UserID: 1, AccessToken: "must-not-login", AccessExpiresAt: now.Add(time.Hour)},
-	}
-	runner := testRunner(t, store, client, now)
-
-	if _, _, err := runner.ensureParentToken(context.Background(), client, config.Account{ID: "account-a"}, store.Auth("account-a")); err == nil {
-		t.Fatal("ensureParentToken() error = nil, want transient refresh error")
+	if !strings.Contains(report.Accounts[0].QueryError, "explicit reauthentication") {
+		t.Fatalf("query error must demand explicit reauthentication: %q", report.Accounts[0].QueryError)
 	}
 	if client.refreshCalls != 1 || client.loginCalls != 0 {
-		t.Fatalf("authentication calls = refresh:%d login:%d, want 1/0", client.refreshCalls, client.loginCalls)
-	}
-}
-
-func TestEnsureParentTokenSerializesConcurrentRefreshes(t *testing.T) {
-	store := testStore(t)
-	defer store.Close()
-	now := time.Date(2026, time.August, 5, 10, 0, 0, 0, shanghaiLocation)
-	if err := store.PutAuth("account-a", state.AuthState{
-		UserID:                1,
-		ParentAccessToken:     "server-expired",
-		ParentAccessExpiresAt: now.Add(-time.Minute),
-	}); err != nil {
-		t.Fatalf("PutAuth() error = %v", err)
-	}
-	refreshRelease := make(chan struct{})
-	client := &fakeClient{
-		userSelfErrs:   []error{&lottery.APIError{StatusCode: http.StatusUnauthorized}},
-		refreshEntered: make(chan struct{}, 1),
-		refreshRelease: refreshRelease,
-		refresh: lottery.LoginResult{
-			UserID:          1,
-			AccessToken:     "cookie-refreshed",
-			AccessExpiresAt: now.Add(time.Hour),
-		},
-		login: lottery.LoginResult{UserID: 1, AccessToken: "must-not-login", AccessExpiresAt: now.Add(time.Hour)},
-	}
-	runner := testRunner(t, store, client, now)
-	auth := store.Auth("account-a")
-
-	type authResult struct {
-		token string
-		err   error
-	}
-	firstDone := make(chan authResult, 1)
-	go func() {
-		_, token, err := runner.ensureParentToken(context.Background(), client, config.Account{ID: "account-a"}, auth)
-		firstDone <- authResult{token: token, err: err}
-	}()
-	select {
-	case <-client.refreshEntered:
-	case <-time.After(time.Second):
-		t.Fatal("first authentication did not reach Refresh()")
-	}
-
-	secondDone := make(chan authResult, 1)
-	go func() {
-		_, token, err := runner.ensureParentToken(context.Background(), client, config.Account{ID: "account-a"}, auth)
-		secondDone <- authResult{token: token, err: err}
-	}()
-	select {
-	case result := <-secondDone:
-		t.Fatalf("second authentication returned before refresh completed: %#v", result)
-	case <-time.After(50 * time.Millisecond):
-	}
-
-	close(refreshRelease)
-	first := <-firstDone
-	second := <-secondDone
-	if first.err != nil || second.err != nil || first.token != "cookie-refreshed" || second.token != "cookie-refreshed" {
-		t.Fatalf("authentication results = %#v / %#v", first, second)
-	}
-	if client.userSelfCalls != 1 || client.refreshCalls != 1 || client.loginCalls != 0 {
-		t.Fatalf("authentication calls = self:%d refresh:%d login:%d, want 1/1/0", client.userSelfCalls, client.refreshCalls, client.loginCalls)
+		t.Fatalf("subscription query refresh/login calls = %d/%d, want 1/0", client.refreshCalls, client.loginCalls)
 	}
 }
 
@@ -805,11 +655,16 @@ func TestRunnerCheckinEligibilityRecoversForbiddenParentToken(t *testing.T) {
 	store := testStore(t)
 	defer store.Close()
 	now := time.Date(2026, time.August, 7, 12, 1, 0, 0, shanghaiLocation)
-	if err := store.PutAuth("account-a", state.AuthState{UserID: 1, ParentAccessToken: "stale-parent", ParentAccessExpiresAt: now.Add(time.Hour)}); err != nil {
+	if err := store.PutAuth("account-a", state.AuthState{
+		UserID:                1,
+		ParentAccessToken:     "stale-parent",
+		ParentAccessExpiresAt: now.Add(time.Hour),
+		Cookies:               []state.Cookie{{Name: "new_api_refresh", Value: "refresh"}},
+	}); err != nil {
 		t.Fatalf("PutAuth() error = %v", err)
 	}
 	client := &fakeClient{
-		login:                  lottery.LoginResult{UserID: 2, AccessToken: "fresh-parent", AccessExpiresAt: now.Add(2 * time.Hour)},
+		refresh:                lottery.LoginResult{UserID: 1, AccessToken: "refreshed-parent", AccessExpiresAt: now.Add(2 * time.Hour)},
 		checkinEligibilityErrs: []error{&lottery.APIError{StatusCode: http.StatusForbidden}, nil},
 		checkinEligibilities:   []lottery.CheckinEligibility{{}, {CanCheckin: true}},
 		checkinResults:         []lottery.CheckinResult{{Success: true, Message: "签到成功"}},
@@ -820,8 +675,11 @@ func TestRunnerCheckinEligibilityRecoversForbiddenParentToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Checkin() error = %v", err)
 	}
-	if outcome.Action.Status != state.ActionCompleted || client.loginCalls != 1 || client.checkinEligibilityCalls != 2 || client.checkinCalls != 1 {
+	if outcome.Action.Status != state.ActionCompleted || client.loginCalls != 0 || client.refreshCalls != 1 || client.checkinEligibilityCalls != 2 || client.checkinCalls != 1 {
 		t.Fatalf("unexpected recovered outcome=%#v client=%#v", outcome, client)
+	}
+	if auth := store.Auth("account-a"); auth.ParentAccessToken != "refreshed-parent" {
+		t.Fatalf("refreshed parent token was not persisted: %#v", auth)
 	}
 }
 
@@ -829,12 +687,17 @@ func TestRunnerCheckinStatusReusesAndRecoversParentToken(t *testing.T) {
 	store := testStore(t)
 	defer store.Close()
 	now := time.Date(2026, time.August, 7, 12, 0, 0, 0, shanghaiLocation)
-	if err := store.PutAuth("account-a", state.AuthState{UserID: 1, ParentAccessToken: "stale-parent", ParentAccessExpiresAt: now.Add(time.Hour)}); err != nil {
+	if err := store.PutAuth("account-a", state.AuthState{
+		UserID:                1,
+		ParentAccessToken:     "stale-parent",
+		ParentAccessExpiresAt: now.Add(time.Hour),
+		Cookies:               []state.Cookie{{Name: "new_api_refresh", Value: "refresh"}},
+	}); err != nil {
 		t.Fatalf("PutAuth() error = %v", err)
 	}
 	reward := 1200.0
 	client := &fakeClient{
-		login:             lottery.LoginResult{UserID: 1, AccessToken: "fresh-parent", AccessExpiresAt: now.Add(2 * time.Hour)},
+		refresh:           lottery.LoginResult{UserID: 1, AccessToken: "refreshed-parent", AccessExpiresAt: now.Add(2 * time.Hour)},
 		checkinStatusErrs: []error{&lottery.APIError{StatusCode: 403}},
 		checkinStatuses: []lottery.CheckinStatus{
 			{},
@@ -848,11 +711,10 @@ func TestRunnerCheckinStatusReusesAndRecoversParentToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CheckinStatus() error = %v", err)
 	}
-	if !status.CheckedInToday || status.TodayQuotaAwardedUSD == nil || *status.TodayQuotaAwardedUSD != 2.4 || client.checkinStatusCalls != 2 || client.loginCalls != 1 {
+	if !status.CheckedInToday || status.TodayQuotaAwardedUSD == nil || *status.TodayQuotaAwardedUSD != 2.4 || client.checkinStatusCalls != 2 || client.loginCalls != 0 || client.refreshCalls != 1 {
 		t.Fatalf("unexpected check-in status=%#v client=%#v", status, client)
 	}
-	auth := store.Auth("account-a")
-	if auth.ParentAccessToken != "fresh-parent" {
+	if auth := store.Auth("account-a"); auth.ParentAccessToken != "refreshed-parent" {
 		t.Fatalf("refreshed parent token was not persisted: %#v", auth)
 	}
 }
@@ -1466,42 +1328,6 @@ func TestRunnerDrawAvailableIgnoresQuotaConversionFailure(t *testing.T) {
 	}
 	if outcome.Result == nil || outcome.Result.ID != "draw-1" || outcome.QuotaDeltaUSD != nil {
 		t.Fatalf("unexpected outcome = %#v", outcome)
-	}
-}
-
-func TestRunnerDrawAvailableSucceedsWhenFinalPutAuthPersistenceFails(t *testing.T) {
-	baseDir := t.TempDir()
-	stateDir := filepath.Join(baseDir, "state")
-	store, err := state.Open(filepath.Join(stateDir, "state.json"))
-	if err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
-	defer store.Close()
-	now := time.Date(2026, time.August, 5, 14, 0, 0, 0, shanghaiLocation)
-	if err := store.PutAuth("account-a", state.AuthState{
-		LotteryAccessToken:     "lottery-token",
-		LotteryAccessExpiresAt: now.Add(time.Hour),
-	}); err != nil {
-		t.Fatalf("PutAuth() error = %v", err)
-	}
-	if err := os.Rename(stateDir, filepath.Join(baseDir, "broken-state")); err != nil {
-		t.Fatalf("Rename() error = %v", err)
-	}
-	client := &fakeClient{
-		dashboards:  []lottery.Dashboard{dashboardWithRemaining(1)},
-		drawResults: []lottery.DrawResult{{ID: "draw-1"}},
-	}
-	runner := testRunner(t, store, client, now)
-
-	outcome, err := runner.DrawAvailable(context.Background(), "account-a", "draw:web:test")
-	if err != nil {
-		t.Fatalf("DrawAvailable() error = %v", err)
-	}
-	if outcome.Skipped || outcome.Result == nil || outcome.Result.ID != "draw-1" {
-		t.Fatalf("unexpected outcome = %#v", outcome)
-	}
-	if client.drawCalls != 1 {
-		t.Fatalf("draw calls = %d, want 1", client.drawCalls)
 	}
 }
 
@@ -2182,39 +2008,6 @@ func TestRunnerPurchaseDrawPendingSideEffectStartedReconcilesWithoutPost(t *test
 	}
 }
 
-func TestRunnerPurchaseDrawSuccessIgnoresFinalPutAuthFailure(t *testing.T) {
-	store := testStore(t)
-	defer store.Close()
-	now := time.Date(2026, time.August, 7, 15, 28, 0, 0, shanghaiLocation)
-	if err := store.PutAuth("account-a", state.AuthState{LotteryAccessToken: "lottery-token", LotteryAccessExpiresAt: now.Add(time.Hour)}); err != nil {
-		t.Fatalf("PutAuth() error = %v", err)
-	}
-	client := &fakeClient{
-		dashboards: []lottery.Dashboard{
-			dashboardWithPurchase(1, 0, 1, 1.25),
-			dashboardWithPurchase(2, 1, 2, 1.25),
-		},
-		purchaseResults: []lottery.OperationResult{{Status: "ok"}},
-	}
-	runner := testRunner(t, store, client, now)
-	runner.putAuth = func(string, state.AuthState) error { return errors.New("persist auth failed") }
-
-	outcome, err := runner.PurchaseDraw(context.Background(), "account-a")
-	if err != nil {
-		t.Fatalf("PurchaseDraw() error = %v", err)
-	}
-	if outcome.Status != string(state.ActionCompleted) || outcome.Activity == nil {
-		t.Fatalf("unexpected outcome = %#v", outcome)
-	}
-	action, ok := store.Action("account-a", now.Format("2006-01-02"), state.ActionDrawPurchase)
-	if !ok || action.Status != state.ActionCompleted {
-		t.Fatalf("stored action = %#v, %v", action, ok)
-	}
-	if _, ok := store.Snapshot("account-a", "activity"); !ok {
-		t.Fatal("activity snapshot missing")
-	}
-}
-
 func TestRunnerUnlockDailyPassAlreadyUnlockedSkipsPost(t *testing.T) {
 	store := testStore(t)
 	defer store.Close()
@@ -2338,39 +2131,6 @@ func TestRunnerUnlockDailyPassSuccess(t *testing.T) {
 	}
 	if client.unlockCalls != 1 || client.dashboardCalls != 2 {
 		t.Fatalf("unexpected client calls = %#v", client)
-	}
-}
-
-func TestRunnerUnlockDailyPassSuccessIgnoresFinalPutAuthFailure(t *testing.T) {
-	store := testStore(t)
-	defer store.Close()
-	now := time.Date(2026, time.August, 7, 15, 36, 0, 0, shanghaiLocation)
-	if err := store.PutAuth("account-a", state.AuthState{LotteryAccessToken: "lottery-token", LotteryAccessExpiresAt: now.Add(time.Hour)}); err != nil {
-		t.Fatalf("PutAuth() error = %v", err)
-	}
-	client := &fakeClient{
-		dashboards: []lottery.Dashboard{
-			dashboardWithPass(false, 2, 3),
-			dashboardWithPass(true, 2, 3),
-		},
-		unlockResults: []lottery.OperationResult{{Status: "ok"}},
-	}
-	runner := testRunner(t, store, client, now)
-	runner.putAuth = func(string, state.AuthState) error { return errors.New("persist auth failed") }
-
-	outcome, err := runner.UnlockDailyPass(context.Background(), "account-a")
-	if err != nil {
-		t.Fatalf("UnlockDailyPass() error = %v", err)
-	}
-	if outcome.Status != string(state.ActionCompleted) || outcome.Activity == nil || !outcome.Activity.PassUnlocked {
-		t.Fatalf("unexpected outcome = %#v", outcome)
-	}
-	action, ok := store.Action("account-a", now.Format("2006-01-02"), state.ActionPassUnlock)
-	if !ok || action.Status != state.ActionCompleted {
-		t.Fatalf("stored action = %#v, %v", action, ok)
-	}
-	if _, ok := store.Snapshot("account-a", "activity"); !ok {
-		t.Fatal("activity snapshot missing")
 	}
 }
 
@@ -2704,7 +2464,69 @@ func testStore(t *testing.T) *state.Store {
 	return store
 }
 
-func testRunner(t *testing.T, store *state.Store, client WebsiteClient, now time.Time) *Runner {
+// storeVault bridges the vault API onto the legacy persisted auth state so
+// existing fixtures keep seeding tokens through store.PutAuth.
+type storeVault struct {
+	store *state.Store
+}
+
+func (v storeVault) Load(_ context.Context, accountID string) (secret.Bundle, error) {
+	authState := v.store.Auth(accountID)
+	if authState.UserID == 0 && authState.ParentAccessToken == "" && authState.LotteryAccessToken == "" && len(authState.Cookies) == 0 {
+		return secret.Bundle{}, secret.ErrNotFound
+	}
+	return secret.Bundle{
+		UserID:                 authState.UserID,
+		ParentAccessToken:      authState.ParentAccessToken,
+		ParentAccessExpiresAt:  authState.ParentAccessExpiresAt,
+		LotteryAccessToken:     authState.LotteryAccessToken,
+		LotteryAccessExpiresAt: authState.LotteryAccessExpiresAt,
+		Cookies:                legacyCookiesToVault(authState.Cookies),
+	}, nil
+}
+
+func (v storeVault) Save(_ context.Context, accountID string, bundle secret.Bundle) error {
+	return v.store.PutAuth(accountID, state.AuthState{
+		UserID:                 bundle.UserID,
+		ParentAccessToken:      bundle.ParentAccessToken,
+		ParentAccessExpiresAt:  bundle.ParentAccessExpiresAt,
+		LotteryAccessToken:     bundle.LotteryAccessToken,
+		LotteryAccessExpiresAt: bundle.LotteryAccessExpiresAt,
+		Cookies:                vaultCookiesToLegacy(bundle.Cookies),
+	})
+}
+
+func (v storeVault) Delete(context.Context, string) error { return nil }
+
+func legacyCookiesToVault(values []state.Cookie) []secret.Cookie {
+	if len(values) == 0 {
+		return nil
+	}
+	cookies := make([]secret.Cookie, 0, len(values))
+	for _, value := range values {
+		cookies = append(cookies, secret.Cookie{
+			Name: value.Name, Value: value.Value, Path: value.Path,
+			Domain: value.Domain, Expires: value.Expires, Secure: value.Secure, HTTPOnly: value.HTTPOnly,
+		})
+	}
+	return cookies
+}
+
+func vaultCookiesToLegacy(values []secret.Cookie) []state.Cookie {
+	if len(values) == 0 {
+		return nil
+	}
+	cookies := make([]state.Cookie, 0, len(values))
+	for _, value := range values {
+		cookies = append(cookies, state.Cookie{
+			Name: value.Name, Value: value.Value, Path: value.Path,
+			Domain: value.Domain, Expires: value.Expires, Secure: value.Secure, HTTPOnly: value.HTTPOnly,
+		})
+	}
+	return cookies
+}
+
+func testRunner(t *testing.T, store *state.Store, client *fakeClient, now time.Time) *Runner {
 	t.Helper()
 	cfg := config.Config{
 		Accounts: map[string]config.Account{
@@ -2714,7 +2536,10 @@ func testRunner(t *testing.T, store *state.Store, client WebsiteClient, now time
 			"account-d": {ID: "account-d", Label: "账号 D", Username: "d", Password: "password"},
 		},
 	}
-	runner := NewRunnerWithFactory(cfg, store, func([]state.Cookie) (WebsiteClient, error) { return client, nil })
+	broker := auth.NewBroker(store, storeVault{store: store}, func([]state.Cookie) (auth.PlatformClient, error) {
+		return client, nil
+	}).WithClock(func() time.Time { return now })
+	runner := NewRunnerWithFactory(cfg, store, broker, func([]state.Cookie) (WebsiteClient, error) { return client, nil })
 	runner.now = func() time.Time { return now }
 	runner.wait = func(context.Context, time.Duration) error { return nil }
 	return runner

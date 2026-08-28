@@ -17,7 +17,10 @@ import (
 	"sync"
 	"time"
 
+	"skyeapi/lottery-bot/internal/auth"
 	"skyeapi/lottery-bot/internal/config"
+	"skyeapi/lottery-bot/internal/lottery"
+	"skyeapi/lottery-bot/internal/secret"
 	"skyeapi/lottery-bot/internal/service"
 	"skyeapi/lottery-bot/internal/state"
 )
@@ -42,6 +45,10 @@ type Server struct {
 	cfg     config.Config
 	storeMu sync.Mutex
 	store   *state.Store
+	broker  *auth.Broker
+	// vaultFactory is overridden in tests to bridge legacy persisted auth
+	// state; production always uses the encrypted file vault.
+	vaultFactory func(store *state.Store) (secret.Vault, error)
 }
 
 func NewServer(cfg config.Config) *Server {
@@ -67,11 +74,16 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 
+	broker, err := s.sharedBroker()
+	if err != nil {
+		_ = s.Close()
+		return fmt.Errorf("create session broker: %w", err)
+	}
 	schedulerCtx, cancelScheduler := context.WithCancel(ctx)
 	schedulerDone := make(chan struct{})
 	go func() {
 		defer close(schedulerDone)
-		service.NewAutoDrawScheduler(s.cfg, store).Run(schedulerCtx)
+		service.NewAutoDrawScheduler(s.cfg, store, broker).Run(schedulerCtx)
 	}()
 
 	shutdownDone := make(chan struct{})
@@ -104,8 +116,11 @@ func (s *Server) Run(ctx context.Context) error {
 func (s *Server) Close() error {
 	s.storeMu.Lock()
 	store := s.store
+	broker := s.broker
 	s.store = nil
+	s.broker = nil
 	s.storeMu.Unlock()
+	_ = broker
 	if store == nil {
 		return nil
 	}
@@ -115,6 +130,10 @@ func (s *Server) Close() error {
 func (s *Server) sharedStore() (*state.Store, error) {
 	s.storeMu.Lock()
 	defer s.storeMu.Unlock()
+	return s.sharedStoreLocked()
+}
+
+func (s *Server) sharedStoreLocked() (*state.Store, error) {
 	if s.store != nil {
 		return s.store, nil
 	}
@@ -124,6 +143,42 @@ func (s *Server) sharedStore() (*state.Store, error) {
 	}
 	s.store = store
 	return store, nil
+}
+
+// sharedBroker lazily builds the process-wide session broker over the shared
+// state store and the encrypted vault.
+func (s *Server) sharedBroker() (*auth.Broker, error) {
+	s.storeMu.Lock()
+	defer s.storeMu.Unlock()
+	if s.broker != nil {
+		return s.broker, nil
+	}
+	store, err := s.sharedStoreLocked()
+	if err != nil {
+		return nil, err
+	}
+	vaultFactory := s.vaultFactory
+	if vaultFactory == nil {
+		vaultFactory = func(*state.Store) (secret.Vault, error) {
+			return secret.NewFileVault(s.cfg.VaultPath, s.cfg.VaultKey)
+		}
+	}
+	vault, err := vaultFactory(store)
+	if err != nil {
+		return nil, err
+	}
+	s.broker = auth.NewBroker(store, vault, func(cookies []state.Cookie) (auth.PlatformClient, error) {
+		return lottery.NewClient(s.cfg.BaseURL, s.cfg.UserAgent, cookies)
+	})
+	return s.broker, nil
+}
+
+func (s *Server) runnerFor(store *state.Store) (*service.Runner, error) {
+	broker, err := s.sharedBroker()
+	if err != nil {
+		return nil, err
+	}
+	return service.NewRunner(s.cfg, store, broker), nil
 }
 
 func (s *Server) Handler() http.Handler {
@@ -301,7 +356,11 @@ func (s *Server) handleAccounts(writer http.ResponseWriter, request *http.Reques
 	sort.Strings(ids)
 	accounts := make([]map[string]interface{}, 0, len(ids))
 	today := time.Now().In(shanghaiLocation).Format("2006-01-02")
-	runner := service.NewRunner(s.cfg, store)
+	runner, err := s.runnerFor(store)
+	if err != nil {
+		writeStoreError(writer, err)
+		return
+	}
 	for _, id := range ids {
 		account := s.cfg.Accounts[id]
 		item := map[string]interface{}{
@@ -422,7 +481,12 @@ func (s *Server) handleCheckinAction(writer http.ResponseWriter, request *http.R
 		writeStoreError(writer, err)
 		return
 	}
-	outcome, err := service.NewRunner(s.cfg, store).Checkin(ctx, accountID)
+	runner, err := s.runnerFor(store)
+	if err != nil {
+		writeStoreError(writer, err)
+		return
+	}
+	outcome, err := runner.Checkin(ctx, accountID)
 	if err != nil {
 		writeUpstreamError(writer, "checkin", accountID, err, "签到暂时失败，请稍后重试")
 		return
@@ -430,7 +494,7 @@ func (s *Server) handleCheckinAction(writer http.ResponseWriter, request *http.R
 	awardUSD := outcome.Action.CheckinQuotaAwardedUSD
 	checkinMessage := outcome.Action.Message
 	if outcome.Action.Status == state.ActionCompleted {
-		if status, statusErr := service.NewRunner(s.cfg, store).CheckinStatus(ctx, accountID); statusErr == nil {
+		if status, statusErr := runner.CheckinStatus(ctx, accountID); statusErr == nil {
 			if status.CheckedInToday {
 				if err := s.markCheckinCompleted(store, accountID, time.Now().In(shanghaiLocation).Format("2006-01-02"), status); err != nil {
 					writeStoreError(writer, err)
@@ -462,7 +526,12 @@ func (s *Server) handleClaimAction(writer http.ResponseWriter, request *http.Req
 		writeStoreError(writer, err)
 		return
 	}
-	outcome, err := service.NewRunner(s.cfg, store).ClaimDaily(ctx, accountID)
+	runner, err := s.runnerFor(store)
+	if err != nil {
+		writeStoreError(writer, err)
+		return
+	}
+	outcome, err := runner.ClaimDaily(ctx, accountID)
 	if err != nil {
 		writeUpstreamError(writer, "claim", accountID, err, "领取每日抽奖暂时失败，请稍后重试")
 		return
@@ -499,7 +568,12 @@ func (s *Server) handleDrawAction(writer http.ResponseWriter, request *http.Requ
 		writeError(writer, http.StatusInternalServerError, "手动抽奖暂时不可用，请稍后重试")
 		return
 	}
-	outcome, err := service.NewRunner(s.cfg, store).DrawAvailable(ctx, accountID, drawKey)
+	runner, err := s.runnerFor(store)
+	if err != nil {
+		writeStoreError(writer, err)
+		return
+	}
+	outcome, err := runner.DrawAvailable(ctx, accountID, drawKey)
 	if err != nil {
 		writeUpstreamError(writer, "draw", accountID, err, "手动抽奖暂时失败，请稍后重试")
 		return
@@ -534,7 +608,12 @@ func (s *Server) handleActivityAction(writer http.ResponseWriter, request *http.
 		writeStoreError(writer, err)
 		return
 	}
-	report, err := service.NewRunner(s.cfg, store).QueryActivity(ctx, accountID)
+	runner, err := s.runnerFor(store)
+	if err != nil {
+		writeStoreError(writer, err)
+		return
+	}
+	report, err := runner.QueryActivity(ctx, accountID)
 	if err != nil {
 		writeUpstreamError(writer, "activity", accountID, err, "活动信息暂时刷新失败，请稍后重试")
 		return
@@ -562,7 +641,12 @@ func (s *Server) handlePurchaseAction(writer http.ResponseWriter, request *http.
 		writeStoreError(writer, err)
 		return
 	}
-	outcome, err := run(ctx, service.NewRunner(s.cfg, store))
+	runner, err := s.runnerFor(store)
+	if err != nil {
+		writeStoreError(writer, err)
+		return
+	}
+	outcome, err := run(ctx, runner)
 	if err != nil {
 		writeUpstreamError(writer, action, accountID, err, fallback)
 		return
@@ -614,7 +698,12 @@ func (s *Server) handleDrawCountQuery(writer http.ResponseWriter, request *http.
 		writeStoreError(writer, err)
 		return
 	}
-	report, err := service.NewRunner(s.cfg, store).QueryDrawCount(ctx, input.AccountID)
+	runner, err := s.runnerFor(store)
+	if err != nil {
+		writeStoreError(writer, err)
+		return
+	}
+	report, err := runner.QueryDrawCount(ctx, input.AccountID)
 	if err != nil {
 		writeUpstreamError(writer, "draw-count", input.AccountID, err, "抽奖次数查询暂时失败，请稍后重试")
 		return
@@ -660,7 +749,12 @@ func (s *Server) handleSubscriptionQuery(writer http.ResponseWriter, request *ht
 		writeStoreError(writer, err)
 		return
 	}
-	report, err := service.NewRunner(s.cfg, store).QuerySubscriptions(ctx, input.AccountID)
+	runner, err := s.runnerFor(store)
+	if err != nil {
+		writeStoreError(writer, err)
+		return
+	}
+	report, err := runner.QuerySubscriptions(ctx, input.AccountID)
 	if err != nil {
 		writeUpstreamError(writer, "subscriptions", input.AccountID, err, "订阅查询暂时失败，请稍后重试")
 		return

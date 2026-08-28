@@ -5,7 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"skyeapi/lottery-bot/internal/config"
 	"skyeapi/lottery-bot/internal/lottery"
 	"skyeapi/lottery-bot/internal/state"
 )
@@ -22,26 +21,25 @@ type PurchaseOutcome struct {
 }
 
 func (r *Runner) PurchaseDraw(ctx context.Context, accountID string) (PurchaseOutcome, error) {
-	account, err := r.account(accountID)
-	if err != nil {
+	if _, err := r.account(accountID); err != nil {
 		return PurchaseOutcome{}, err
 	}
 	date := r.today()
 	callStarted := time.Now().UTC()
-	release := r.store.LockAction(account.ID, date, state.ActionDrawPurchase)
+	release := r.store.LockAction(accountID, date, state.ActionDrawPurchase)
 	defer release()
 
-	action, created, err := r.store.GetOrCreateAction(account.ID, date, state.ActionDrawPurchase)
+	action, created, err := r.store.GetOrCreateAction(accountID, date, state.ActionDrawPurchase)
 	if err != nil {
 		return PurchaseOutcome{}, err
 	}
 	if !created {
 		switch {
 		case action.Status == state.ActionUnknown || action.SideEffectStarted:
-			return r.reconcilePurchaseDraw(ctx, account, action)
+			return r.reconcilePurchaseDraw(ctx, accountID, action)
 		case action.Status == state.ActionCompleted:
 			if !action.UpdatedAt.Before(callStarted) {
-				return purchaseOutcomeFromAction(account.ID, action, nil, nil, true), nil
+				return purchaseOutcomeFromAction(accountID, action, nil, nil, true), nil
 			}
 			action, err = r.store.RotateRepeatableAction(action.Key)
 			if err != nil {
@@ -49,7 +47,7 @@ func (r *Runner) PurchaseDraw(ctx context.Context, accountID string) (PurchaseOu
 			}
 		case action.Status == state.ActionFailed && action.Retryable && !action.SideEffectStarted:
 			if !action.UpdatedAt.Before(callStarted) {
-				return purchaseOutcomeFromAction(account.ID, action, nil, nil, true), nil
+				return purchaseOutcomeFromAction(accountID, action, nil, nil, true), nil
 			}
 			action, err = r.store.RotateRepeatableAction(action.Key)
 			if err != nil {
@@ -58,22 +56,17 @@ func (r *Runner) PurchaseDraw(ctx context.Context, accountID string) (PurchaseOu
 		case action.Status == state.ActionPending && !action.SideEffectStarted:
 			// Resume a created-but-not-started purchase after restart.
 		default:
-			return purchaseOutcomeFromAction(account.ID, action, nil, nil, true), nil
+			return purchaseOutcomeFromAction(accountID, action, nil, nil, true), nil
 		}
 	}
 
-	auth := r.store.Auth(account.ID)
-	client, err := r.newClient(auth.Cookies)
+	sess, client, err := r.acquireLotteryForAction(ctx, accountID)
 	if err != nil {
-		return r.recordPurchasePreflightError(account.ID, action, nil, err)
+		return r.recordPurchasePreflightError(accountID, action, nil, err)
 	}
-	auth, lotteryToken, err := r.ensureLotteryToken(ctx, client, account, auth)
+	sess, beforeDashboard, err := r.dashboardWithRecovery(ctx, client, accountID, sess)
 	if err != nil {
-		return r.recordPurchasePreflightError(account.ID, action, nil, err)
-	}
-	beforeDashboard, auth, lotteryToken, err := r.dashboardWithRecovery(ctx, client, account, auth, lotteryToken)
-	if err != nil {
-		return r.recordPurchasePreflightError(account.ID, action, nil, err)
+		return r.recordPurchasePreflightError(accountID, action, nil, err)
 	}
 	price := dashboardPurchasePrice(beforeDashboard)
 	beforeRemaining := dashboardRemainingPointer(beforeDashboard)
@@ -96,7 +89,7 @@ func (r *Runner) PurchaseDraw(ctx context.Context, accountID string) (PurchaseOu
 		return PurchaseOutcome{}, err
 	}
 
-	result, auth, lotteryToken, err := r.purchaseDrawWithRecovery(ctx, client, account, auth, lotteryToken, action.IdempotencyKey)
+	result, sess, err := r.purchaseDrawWithRecovery(ctx, client, accountID, sess, action.IdempotencyKey)
 	if err != nil {
 		if isExplicitInsufficient(err) {
 			updated, updateErr := r.finishAction(action, func(value *state.Action) {
@@ -109,40 +102,36 @@ func (r *Runner) PurchaseDraw(ctx context.Context, accountID string) (PurchaseOu
 			if updateErr != nil {
 				return PurchaseOutcome{}, updateErr
 			}
-			if putErr := r.store.PutAuth(account.ID, auth); putErr != nil {
-				return PurchaseOutcome{}, putErr
-			}
-			return purchaseOutcomeFromAction(account.ID, updated, beforeRemaining, nil, false), nil
+			return purchaseOutcomeFromAction(accountID, updated, beforeRemaining, nil, false), nil
 		}
-		return r.reconcilePurchaseAfterPostError(ctx, client, account, auth, lotteryToken, action, price, err)
+		return r.reconcilePurchaseAfterPostError(ctx, client, accountID, sess, action, price, err)
 	}
 
-	afterDashboard, auth, _, err := r.dashboardWithRecovery(ctx, client, account, auth, lotteryToken)
+	sess, afterDashboard, err := r.dashboardWithRecovery(ctx, client, accountID, sess)
 	if err != nil {
-		return r.finishPurchaseWithoutProof(account.ID, auth, action, price, nil, result.Status, safeError(err))
+		return r.finishPurchaseWithoutProof(accountID, action, price, nil, result.Status, safeError(err))
 	}
-	return r.finishPurchaseDrawFromDashboard(account.ID, auth, action, price, afterDashboard, result.Status, "")
+	return r.finishPurchaseDrawFromDashboard(accountID, action, price, afterDashboard, result.Status, "")
 }
 
 func (r *Runner) UnlockDailyPass(ctx context.Context, accountID string) (PurchaseOutcome, error) {
-	account, err := r.account(accountID)
-	if err != nil {
+	if _, err := r.account(accountID); err != nil {
 		return PurchaseOutcome{}, err
 	}
 	date := r.today()
-	release := r.store.LockAction(account.ID, date, state.ActionPassUnlock)
+	release := r.store.LockAction(accountID, date, state.ActionPassUnlock)
 	defer release()
 
-	action, created, err := r.store.GetOrCreateAction(account.ID, date, state.ActionPassUnlock)
+	action, created, err := r.store.GetOrCreateAction(accountID, date, state.ActionPassUnlock)
 	if err != nil {
 		return PurchaseOutcome{}, err
 	}
 	if !created {
 		switch {
 		case action.Status == state.ActionCompleted:
-			return purchaseOutcomeFromAction(account.ID, action, nil, nil, true), nil
+			return purchaseOutcomeFromAction(accountID, action, nil, nil, true), nil
 		case action.Status == state.ActionUnknown || action.SideEffectStarted:
-			return r.reconcileUnlockDailyPass(ctx, account, action)
+			return r.reconcileUnlockDailyPass(ctx, accountID, action)
 		case action.Status == state.ActionPending && !action.SideEffectStarted:
 			// Resume a created-but-not-started unlock after restart.
 		case action.Status == state.ActionFailed && action.Retryable && !action.SideEffectStarted:
@@ -151,22 +140,17 @@ func (r *Runner) UnlockDailyPass(ctx context.Context, accountID string) (Purchas
 				return PurchaseOutcome{}, err
 			}
 		default:
-			return purchaseOutcomeFromAction(account.ID, action, nil, nil, true), nil
+			return purchaseOutcomeFromAction(accountID, action, nil, nil, true), nil
 		}
 	}
 
-	auth := r.store.Auth(account.ID)
-	client, err := r.newClient(auth.Cookies)
+	sess, client, err := r.acquireLotteryForAction(ctx, accountID)
 	if err != nil {
-		return r.recordPurchasePreflightError(account.ID, action, nil, err)
+		return r.recordPurchasePreflightError(accountID, action, nil, err)
 	}
-	auth, lotteryToken, err := r.ensureLotteryToken(ctx, client, account, auth)
+	sess, beforeDashboard, err := r.dashboardWithRecovery(ctx, client, accountID, sess)
 	if err != nil {
-		return r.recordPurchasePreflightError(account.ID, action, nil, err)
-	}
-	beforeDashboard, auth, lotteryToken, err := r.dashboardWithRecovery(ctx, client, account, auth, lotteryToken)
-	if err != nil {
-		return r.recordPurchasePreflightError(account.ID, action, nil, err)
+		return r.recordPurchasePreflightError(accountID, action, nil, err)
 	}
 	price := dashboardPassPrice(beforeDashboard)
 	beforeUnlocked := dashboardPassUnlockedForToday(beforeDashboard, r.today())
@@ -194,19 +178,18 @@ func (r *Runner) UnlockDailyPass(ctx context.Context, accountID string) (Purchas
 		if updateErr != nil {
 			return PurchaseOutcome{}, updateErr
 		}
-		report, snapshotErr := r.storeActivitySnapshot(account.ID, beforeDashboard)
+		report, snapshotErr := r.storeActivitySnapshot(accountID, beforeDashboard)
 		if snapshotErr != nil {
 			return PurchaseOutcome{}, snapshotErr
 		}
-		r.putPurchaseAuthBestEffort(account.ID, auth)
-		return purchaseOutcomeFromAction(account.ID, updated, beforeRemaining, report, false), nil
+		return purchaseOutcomeFromAction(accountID, updated, beforeRemaining, report, false), nil
 	}
 	action, err = r.startAction(action)
 	if err != nil {
 		return PurchaseOutcome{}, err
 	}
 
-	result, auth, lotteryToken, err := r.unlockDailyPassWithRecovery(ctx, client, account, auth, lotteryToken, action.IdempotencyKey)
+	result, sess, err := r.unlockDailyPassWithRecovery(ctx, client, accountID, sess, action.IdempotencyKey)
 	if err != nil {
 		if isExplicitInsufficient(err) {
 			updated, updateErr := r.finishAction(action, func(value *state.Action) {
@@ -219,40 +202,29 @@ func (r *Runner) UnlockDailyPass(ctx context.Context, accountID string) (Purchas
 			if updateErr != nil {
 				return PurchaseOutcome{}, updateErr
 			}
-			if putErr := r.store.PutAuth(account.ID, auth); putErr != nil {
-				return PurchaseOutcome{}, putErr
-			}
-			return purchaseOutcomeFromAction(account.ID, updated, beforeRemaining, nil, false), nil
+			return purchaseOutcomeFromAction(accountID, updated, beforeRemaining, nil, false), nil
 		}
-		return r.reconcileUnlockAfterPostError(ctx, client, account, auth, lotteryToken, action, price, err)
+		return r.reconcileUnlockAfterPostError(ctx, client, accountID, sess, action, price, err)
 	}
 
-	afterDashboard, auth, _, err := r.dashboardWithRecovery(ctx, client, account, auth, lotteryToken)
+	sess, afterDashboard, err := r.dashboardWithRecovery(ctx, client, accountID, sess)
 	if err != nil {
-		return r.finishPurchaseWithoutProof(account.ID, auth, action, price, nil, result.Status, safeError(err))
+		return r.finishPurchaseWithoutProof(accountID, action, price, nil, result.Status, safeError(err))
 	}
-	return r.finishUnlockFromDashboard(account.ID, auth, action, price, afterDashboard, result.Status, "")
+	return r.finishUnlockFromDashboard(accountID, action, price, afterDashboard, result.Status, "")
 }
 
-func (r *Runner) reconcilePurchaseDraw(ctx context.Context, account config.Account, action state.Action) (PurchaseOutcome, error) {
-	auth := r.store.Auth(account.ID)
-	client, err := r.newClient(auth.Cookies)
+func (r *Runner) reconcilePurchaseDraw(ctx context.Context, accountID string, action state.Action) (PurchaseOutcome, error) {
+	sess, client, err := r.acquireLotteryForAction(ctx, accountID)
 	if err != nil {
 		return PurchaseOutcome{}, err
 	}
-	auth, lotteryToken, err := r.ensureLotteryToken(ctx, client, account, auth)
-	if err != nil {
-		return PurchaseOutcome{}, err
-	}
-	afterDashboard, auth, _, err := r.dashboardWithRecovery(ctx, client, account, auth, lotteryToken)
+	sess, afterDashboard, err := r.dashboardWithRecovery(ctx, client, accountID, sess)
 	if err != nil {
 		return PurchaseOutcome{}, err
 	}
 	if purchaseDashboardProvesSuccess(action, afterDashboard) {
-		return r.finishPurchaseDrawFromDashboard(account.ID, auth, action, copyFloatPointer(action.PriceUSD), afterDashboard, "", "购买抽奖次数已对账完成")
-	}
-	if putErr := r.store.PutAuth(account.ID, auth); putErr != nil {
-		return PurchaseOutcome{}, putErr
+		return r.finishPurchaseDrawFromDashboard(accountID, action, copyFloatPointer(action.PriceUSD), afterDashboard, "", "购买抽奖次数已对账完成")
 	}
 	if action.Status == state.ActionPending {
 		updated, updateErr := r.finishAction(action, func(value *state.Action) {
@@ -264,7 +236,7 @@ func (r *Runner) reconcilePurchaseDraw(ctx context.Context, account config.Accou
 		if updateErr != nil {
 			return PurchaseOutcome{}, updateErr
 		}
-		return purchaseOutcomeFromAction(account.ID, updated, dashboardRemainingPointer(afterDashboard), nil, true), nil
+		return purchaseOutcomeFromAction(accountID, updated, dashboardRemainingPointer(afterDashboard), nil, true), nil
 	}
 	updated, updateErr := r.finishAction(action, func(value *state.Action) {
 		value.Status = state.ActionUnknown
@@ -275,28 +247,20 @@ func (r *Runner) reconcilePurchaseDraw(ctx context.Context, account config.Accou
 	if updateErr != nil {
 		return PurchaseOutcome{}, updateErr
 	}
-	return purchaseOutcomeFromAction(account.ID, updated, dashboardRemainingPointer(afterDashboard), nil, true), nil
+	return purchaseOutcomeFromAction(accountID, updated, dashboardRemainingPointer(afterDashboard), nil, true), nil
 }
 
-func (r *Runner) reconcileUnlockDailyPass(ctx context.Context, account config.Account, action state.Action) (PurchaseOutcome, error) {
-	auth := r.store.Auth(account.ID)
-	client, err := r.newClient(auth.Cookies)
+func (r *Runner) reconcileUnlockDailyPass(ctx context.Context, accountID string, action state.Action) (PurchaseOutcome, error) {
+	sess, client, err := r.acquireLotteryForAction(ctx, accountID)
 	if err != nil {
 		return PurchaseOutcome{}, err
 	}
-	auth, lotteryToken, err := r.ensureLotteryToken(ctx, client, account, auth)
-	if err != nil {
-		return PurchaseOutcome{}, err
-	}
-	afterDashboard, auth, _, err := r.dashboardWithRecovery(ctx, client, account, auth, lotteryToken)
+	sess, afterDashboard, err := r.dashboardWithRecovery(ctx, client, accountID, sess)
 	if err != nil {
 		return PurchaseOutcome{}, err
 	}
 	if dashboardPassUnlockedForToday(afterDashboard, r.today()) {
-		return r.finishUnlockFromDashboard(account.ID, auth, action, copyFloatPointer(action.PriceUSD), afterDashboard, "", "今日通行证已对账完成")
-	}
-	if putErr := r.store.PutAuth(account.ID, auth); putErr != nil {
-		return PurchaseOutcome{}, putErr
+		return r.finishUnlockFromDashboard(accountID, action, copyFloatPointer(action.PriceUSD), afterDashboard, "", "今日通行证已对账完成")
 	}
 	if action.Status == state.ActionPending {
 		updated, updateErr := r.finishAction(action, func(value *state.Action) {
@@ -308,7 +272,7 @@ func (r *Runner) reconcileUnlockDailyPass(ctx context.Context, account config.Ac
 		if updateErr != nil {
 			return PurchaseOutcome{}, updateErr
 		}
-		return purchaseOutcomeFromAction(account.ID, updated, dashboardRemainingPointer(afterDashboard), nil, true), nil
+		return purchaseOutcomeFromAction(accountID, updated, dashboardRemainingPointer(afterDashboard), nil, true), nil
 	}
 	updated, updateErr := r.finishAction(action, func(value *state.Action) {
 		value.Status = state.ActionUnknown
@@ -319,32 +283,32 @@ func (r *Runner) reconcileUnlockDailyPass(ctx context.Context, account config.Ac
 	if updateErr != nil {
 		return PurchaseOutcome{}, updateErr
 	}
-	return purchaseOutcomeFromAction(account.ID, updated, dashboardRemainingPointer(afterDashboard), nil, true), nil
+	return purchaseOutcomeFromAction(accountID, updated, dashboardRemainingPointer(afterDashboard), nil, true), nil
 }
 
-func (r *Runner) reconcilePurchaseAfterPostError(ctx context.Context, client WebsiteClient, account config.Account, auth state.AuthState, lotteryToken string, action state.Action, price *float64, cause error) (PurchaseOutcome, error) {
-	afterDashboard, auth, _, err := r.dashboardWithRecovery(ctx, client, account, auth, lotteryToken)
+func (r *Runner) reconcilePurchaseAfterPostError(ctx context.Context, client WebsiteClient, accountID string, sess session, action state.Action, price *float64, cause error) (PurchaseOutcome, error) {
+	sess, afterDashboard, err := r.dashboardWithRecovery(ctx, client, accountID, sess)
 	if err == nil {
 		if purchaseDashboardProvesSuccess(action, afterDashboard) {
-			return r.finishPurchaseDrawFromDashboard(account.ID, auth, action, price, afterDashboard, "", "购买抽奖次数已对账完成")
+			return r.finishPurchaseDrawFromDashboard(accountID, action, price, afterDashboard, "", "购买抽奖次数已对账完成")
 		}
-		return r.finishPurchaseWithoutProof(account.ID, auth, action, price, dashboardRemainingPointer(afterDashboard), "", safeError(cause))
+		return r.finishPurchaseWithoutProof(accountID, action, price, dashboardRemainingPointer(afterDashboard), "", safeError(cause))
 	}
-	return r.finishPurchaseWithoutProof(account.ID, auth, action, price, nil, "", safeError(cause))
+	return r.finishPurchaseWithoutProof(accountID, action, price, nil, "", safeError(cause))
 }
 
-func (r *Runner) reconcileUnlockAfterPostError(ctx context.Context, client WebsiteClient, account config.Account, auth state.AuthState, lotteryToken string, action state.Action, price *float64, cause error) (PurchaseOutcome, error) {
-	afterDashboard, auth, _, err := r.dashboardWithRecovery(ctx, client, account, auth, lotteryToken)
+func (r *Runner) reconcileUnlockAfterPostError(ctx context.Context, client WebsiteClient, accountID string, sess session, action state.Action, price *float64, cause error) (PurchaseOutcome, error) {
+	sess, afterDashboard, err := r.dashboardWithRecovery(ctx, client, accountID, sess)
 	if err == nil {
 		if dashboardPassUnlockedForToday(afterDashboard, r.today()) {
-			return r.finishUnlockFromDashboard(account.ID, auth, action, price, afterDashboard, "", "今日通行证已对账完成")
+			return r.finishUnlockFromDashboard(accountID, action, price, afterDashboard, "", "今日通行证已对账完成")
 		}
-		return r.finishPurchaseWithoutProof(account.ID, auth, action, price, dashboardRemainingPointer(afterDashboard), "", safeError(cause))
+		return r.finishPurchaseWithoutProof(accountID, action, price, dashboardRemainingPointer(afterDashboard), "", safeError(cause))
 	}
-	return r.finishPurchaseWithoutProof(account.ID, auth, action, price, nil, "", safeError(cause))
+	return r.finishPurchaseWithoutProof(accountID, action, price, nil, "", safeError(cause))
 }
 
-func (r *Runner) finishPurchaseDrawFromDashboard(accountID string, auth state.AuthState, action state.Action, price *float64, afterDashboard lottery.Dashboard, operationStatus, fallbackMessage string) (PurchaseOutcome, error) {
+func (r *Runner) finishPurchaseDrawFromDashboard(accountID string, action state.Action, price *float64, afterDashboard lottery.Dashboard, operationStatus, fallbackMessage string) (PurchaseOutcome, error) {
 	if purchaseDashboardProvesSuccess(action, afterDashboard) {
 		report, err := r.storeActivitySnapshot(accountID, afterDashboard)
 		if err != nil {
@@ -361,13 +325,12 @@ func (r *Runner) finishPurchaseDrawFromDashboard(accountID string, auth state.Au
 		if err != nil {
 			return PurchaseOutcome{}, err
 		}
-		r.putPurchaseAuthBestEffort(accountID, auth)
 		return purchaseOutcomeFromAction(accountID, updated, dashboardRemainingPointer(afterDashboard), report, false), nil
 	}
-	return r.finishPurchaseWithoutProof(accountID, auth, action, price, dashboardRemainingPointer(afterDashboard), operationStatus, fallbackMessage)
+	return r.finishPurchaseWithoutProof(accountID, action, price, dashboardRemainingPointer(afterDashboard), operationStatus, fallbackMessage)
 }
 
-func (r *Runner) finishUnlockFromDashboard(accountID string, auth state.AuthState, action state.Action, price *float64, afterDashboard lottery.Dashboard, operationStatus, fallbackMessage string) (PurchaseOutcome, error) {
+func (r *Runner) finishUnlockFromDashboard(accountID string, action state.Action, price *float64, afterDashboard lottery.Dashboard, operationStatus, fallbackMessage string) (PurchaseOutcome, error) {
 	if dashboardPassUnlockedForToday(afterDashboard, r.today()) {
 		report, err := r.storeActivitySnapshot(accountID, afterDashboard)
 		if err != nil {
@@ -384,13 +347,12 @@ func (r *Runner) finishUnlockFromDashboard(accountID string, auth state.AuthStat
 		if err != nil {
 			return PurchaseOutcome{}, err
 		}
-		r.putPurchaseAuthBestEffort(accountID, auth)
 		return purchaseOutcomeFromAction(accountID, updated, dashboardRemainingPointer(afterDashboard), report, false), nil
 	}
-	return r.finishPurchaseWithoutProof(accountID, auth, action, price, dashboardRemainingPointer(afterDashboard), operationStatus, fallbackMessage)
+	return r.finishPurchaseWithoutProof(accountID, action, price, dashboardRemainingPointer(afterDashboard), operationStatus, fallbackMessage)
 }
 
-func (r *Runner) finishPurchaseWithoutProof(accountID string, auth state.AuthState, action state.Action, price *float64, remaining *int, operationStatus, fallbackMessage string) (PurchaseOutcome, error) {
+func (r *Runner) finishPurchaseWithoutProof(accountID string, action state.Action, price *float64, remaining *int, operationStatus, fallbackMessage string) (PurchaseOutcome, error) {
 	updated, err := r.finishAction(action, func(value *state.Action) {
 		value.PriceUSD = copyFloatPointer(price)
 		value.Retryable = false
@@ -409,16 +371,13 @@ func (r *Runner) finishPurchaseWithoutProof(accountID string, auth state.AuthSta
 	if err != nil {
 		return PurchaseOutcome{}, err
 	}
-	if err := r.store.PutAuth(accountID, auth); err != nil {
-		return PurchaseOutcome{}, err
-	}
 	return purchaseOutcomeFromAction(accountID, updated, remaining, nil, false), nil
 }
 
 func (r *Runner) recordPurchasePreflightError(accountID string, action state.Action, remaining *int, cause error) (PurchaseOutcome, error) {
 	updated, err := r.finishAction(action, func(value *state.Action) {
 		value.Status = state.ActionFailed
-		value.Retryable = true
+		value.Retryable = authRetryable(cause)
 		value.SideEffectStarted = false
 		value.Message = safeError(cause)
 		value.LastError = value.Message
@@ -429,40 +388,44 @@ func (r *Runner) recordPurchasePreflightError(accountID string, action state.Act
 	return purchaseOutcomeFromAction(accountID, updated, remaining, nil, false), nil
 }
 
-func (r *Runner) purchaseDrawWithRecovery(ctx context.Context, client WebsiteClient, account config.Account, auth state.AuthState, lotteryToken, idempotencyKey string) (lottery.OperationResult, state.AuthState, string, error) {
-	result, err := client.PurchaseDraw(ctx, lotteryToken, idempotencyKey)
+func (r *Runner) purchaseDrawWithRecovery(ctx context.Context, client WebsiteClient, accountID string, sess session, idempotencyKey string) (lottery.OperationResult, session, error) {
+	result, err := client.PurchaseDraw(ctx, sess.token, idempotencyKey)
 	if err == nil {
-		return result, auth, lotteryToken, nil
+		return result, sess, nil
 	}
 	if !lottery.IsStatus(err, 401) && !lottery.IsStatus(err, 403) {
-		return lottery.OperationResult{}, auth, lotteryToken, err
+		return lottery.OperationResult{}, sess, err
 	}
-	auth.LotteryAccessToken = ""
-	auth.LotteryAccessExpiresAt = time.Time{}
-	auth, lotteryToken, err = r.ensureLotteryToken(ctx, client, account, auth)
+	renewed, err := r.renewLottery(ctx, accountID, sess.token)
 	if err != nil {
-		return lottery.OperationResult{}, auth, lotteryToken, err
+		return lottery.OperationResult{}, sess, err
 	}
-	result, err = client.PurchaseDraw(ctx, lotteryToken, idempotencyKey)
-	return result, auth, lotteryToken, err
+	retryClient, clientErr := r.clientFor(renewed)
+	if clientErr != nil {
+		return lottery.OperationResult{}, renewed, clientErr
+	}
+	result, err = retryClient.PurchaseDraw(ctx, renewed.token, idempotencyKey)
+	return result, renewed, err
 }
 
-func (r *Runner) unlockDailyPassWithRecovery(ctx context.Context, client WebsiteClient, account config.Account, auth state.AuthState, lotteryToken, idempotencyKey string) (lottery.OperationResult, state.AuthState, string, error) {
-	result, err := client.UnlockDrawLimit(ctx, lotteryToken, idempotencyKey)
+func (r *Runner) unlockDailyPassWithRecovery(ctx context.Context, client WebsiteClient, accountID string, sess session, idempotencyKey string) (lottery.OperationResult, session, error) {
+	result, err := client.UnlockDrawLimit(ctx, sess.token, idempotencyKey)
 	if err == nil {
-		return result, auth, lotteryToken, nil
+		return result, sess, nil
 	}
 	if !lottery.IsStatus(err, 401) && !lottery.IsStatus(err, 403) {
-		return lottery.OperationResult{}, auth, lotteryToken, err
+		return lottery.OperationResult{}, sess, err
 	}
-	auth.LotteryAccessToken = ""
-	auth.LotteryAccessExpiresAt = time.Time{}
-	auth, lotteryToken, err = r.ensureLotteryToken(ctx, client, account, auth)
+	renewed, err := r.renewLottery(ctx, accountID, sess.token)
 	if err != nil {
-		return lottery.OperationResult{}, auth, lotteryToken, err
+		return lottery.OperationResult{}, sess, err
 	}
-	result, err = client.UnlockDrawLimit(ctx, lotteryToken, idempotencyKey)
-	return result, auth, lotteryToken, err
+	retryClient, clientErr := r.clientFor(renewed)
+	if clientErr != nil {
+		return lottery.OperationResult{}, renewed, clientErr
+	}
+	result, err = retryClient.UnlockDrawLimit(ctx, renewed.token, idempotencyKey)
+	return result, renewed, err
 }
 
 func purchaseOutcomeFromAction(accountID string, action state.Action, remaining *int, activity *ActivityReport, alreadyRecorded bool) PurchaseOutcome {
@@ -527,11 +490,6 @@ func dashboardRemainingPointer(dashboard lottery.Dashboard) *int {
 	return copyIntPointerValue(ok, value)
 }
 
-func dashboardPassUnlocked(dashboard lottery.Dashboard) bool {
-	limit, _ := dashboard.EffectiveDrawLimit()
-	return boolOrDefault(limit.Unlocked, false)
-}
-
 func dashboardPassUnlockedForToday(dashboard lottery.Dashboard, today string) bool {
 	limit, _ := dashboard.EffectiveDrawLimit()
 	if !boolOrDefault(limit.Unlocked, false) {
@@ -584,12 +542,4 @@ func isExplicitInsufficient(err error) bool {
 		}
 	}
 	return false
-}
-
-func (r *Runner) putPurchaseAuthBestEffort(accountID string, auth state.AuthState) {
-	if r.putAuth != nil {
-		_ = r.putAuth(accountID, auth)
-		return
-	}
-	_ = r.store.PutAuth(accountID, auth)
 }

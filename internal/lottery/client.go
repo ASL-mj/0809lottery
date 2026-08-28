@@ -16,7 +16,6 @@ import (
 	"sync"
 	"time"
 
-	"skyeapi/lottery-bot/internal/config"
 	"skyeapi/lottery-bot/internal/state"
 )
 
@@ -51,6 +50,13 @@ type LoginResult struct {
 	UserID          int64
 	AccessToken     string
 	AccessExpiresAt time.Time
+}
+
+// Credentials carries one account's login material. It decouples the platform
+// client from configuration and from the account registry.
+type Credentials struct {
+	Username string
+	Password string
 }
 
 type BridgeResult struct {
@@ -381,10 +387,10 @@ func (c *Client) Cookies() []state.Cookie {
 	return c.cookies.snapshot()
 }
 
-func (c *Client) Login(ctx context.Context, account config.Account) (LoginResult, error) {
+func (c *Client) Login(ctx context.Context, credentials Credentials) (LoginResult, error) {
 	payload, err := json.Marshal(map[string]string{
-		"username": account.Username,
-		"password": account.Password,
+		"username": credentials.Username,
+		"password": credentials.Password,
 	})
 	if err != nil {
 		return LoginResult{}, fmt.Errorf("encode login payload: %w", err)

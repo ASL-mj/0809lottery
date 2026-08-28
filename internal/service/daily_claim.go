@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"skyeapi/lottery-bot/internal/config"
+	"skyeapi/lottery-bot/internal/auth"
 	"skyeapi/lottery-bot/internal/lottery"
 	"skyeapi/lottery-bot/internal/state"
 )
@@ -17,15 +17,14 @@ type DailyClaimOutcome struct {
 }
 
 func (r *Runner) ClaimDaily(ctx context.Context, accountID string) (DailyClaimOutcome, error) {
-	account, err := r.account(accountID)
-	if err != nil {
+	if _, err := r.account(accountID); err != nil {
 		return DailyClaimOutcome{}, err
 	}
 	date := r.today()
-	releaseActionLock := r.store.LockAction(account.ID, date, state.ActionDailyClaim)
+	releaseActionLock := r.store.LockAction(accountID, date, state.ActionDailyClaim)
 	defer releaseActionLock()
 
-	action, created, err := r.store.GetOrCreateAction(account.ID, date, state.ActionDailyClaim)
+	action, created, err := r.store.GetOrCreateAction(accountID, date, state.ActionDailyClaim)
 	if err != nil {
 		return DailyClaimOutcome{}, err
 	}
@@ -41,22 +40,17 @@ func (r *Runner) ClaimDaily(ctx context.Context, accountID string) (DailyClaimOu
 		case action.Status == state.ActionPending && !action.SideEffectStarted:
 			// Resume a previously created-but-not-started claim after restart or same-process retry.
 		case action.Status == state.ActionUnknown || action.SideEffectStarted:
-			return r.reconcileDailyClaim(ctx, account, action)
+			return r.reconcileDailyClaim(ctx, accountID, action)
 		default:
 			return dailyClaimRecordedOutcome(action), nil
 		}
 	}
 
-	auth := r.store.Auth(account.ID)
-	client, err := r.newClient(auth.Cookies)
+	sess, client, err := r.acquireLotteryForAction(ctx, accountID)
 	if err != nil {
 		return r.recordDailyClaimPreflightError(action, err)
 	}
-	auth, lotteryToken, err := r.ensureLotteryToken(ctx, client, account, auth)
-	if err != nil {
-		return r.recordDailyClaimPreflightError(action, err)
-	}
-	beforeDashboard, auth, lotteryToken, err := r.dashboardWithRecovery(ctx, client, account, auth, lotteryToken)
+	beforeDashboard, sess, err := r.dashboardForClaim(ctx, client, accountID, sess)
 	if err != nil {
 		return r.recordDailyClaimPreflightError(action, err)
 	}
@@ -79,9 +73,9 @@ func (r *Runner) ClaimDaily(ctx context.Context, accountID string) (DailyClaimOu
 		return DailyClaimOutcome{}, err
 	}
 
-	result, auth, err := r.claimWithRecovery(ctx, client, account, auth, lotteryToken)
+	result, sess, err := r.claimWithRecovery(ctx, client, accountID, sess)
 	if err != nil {
-		return r.reconcileClaimAfterPostError(ctx, client, account, auth, lotteryToken, action, before, err)
+		return r.reconcileClaimAfterPostError(ctx, client, accountID, sess, action, before, err)
 	}
 	if !result.Success {
 		updated, updateErr := r.finishAction(action, func(value *state.Action) {
@@ -96,9 +90,6 @@ func (r *Runner) ClaimDaily(ctx context.Context, accountID string) (DailyClaimOu
 		if updateErr != nil {
 			return DailyClaimOutcome{}, updateErr
 		}
-		if err := r.store.PutAuth(account.ID, auth); err != nil {
-			return DailyClaimOutcome{}, err
-		}
 		return DailyClaimOutcome{
 			Action:    updated,
 			Added:     0,
@@ -109,15 +100,15 @@ func (r *Runner) ClaimDaily(ctx context.Context, accountID string) (DailyClaimOu
 	afterDashboard := result.Dashboard
 	if afterDashboard == nil {
 		var dashboard lottery.Dashboard
-		dashboard, auth, _, err = r.dashboardWithRecovery(ctx, client, account, auth, lotteryToken)
+		sess, dashboard, err = r.dashboardWithRecovery(ctx, client, accountID, sess)
 		if err != nil {
-			return r.reconcileClaimAfterPostError(ctx, client, account, auth, lotteryToken, action, before, err)
+			return r.reconcileClaimAfterPostError(ctx, client, accountID, sess, action, before, err)
 		}
 		afterDashboard = &dashboard
 	}
 	after, ok := afterDashboard.Remaining()
 	if !ok {
-		return r.reconcileClaimAfterPostError(ctx, client, account, auth, lotteryToken, action, before, fmt.Errorf("抽奖次数接口没有返回 remaining"))
+		return r.reconcileClaimAfterPostError(ctx, client, accountID, sess, action, before, fmt.Errorf("抽奖次数接口没有返回 remaining"))
 	}
 	added := 0
 	if after > before {
@@ -134,9 +125,6 @@ func (r *Runner) ClaimDaily(ctx context.Context, accountID string) (DailyClaimOu
 	if err != nil {
 		return DailyClaimOutcome{}, err
 	}
-	if err := r.store.PutAuth(account.ID, auth); err != nil {
-		return DailyClaimOutcome{}, err
-	}
 	return DailyClaimOutcome{
 		Action:    updated,
 		Added:     added,
@@ -144,24 +132,16 @@ func (r *Runner) ClaimDaily(ctx context.Context, accountID string) (DailyClaimOu
 	}, nil
 }
 
-func (r *Runner) reconcileDailyClaim(ctx context.Context, account config.Account, action state.Action) (DailyClaimOutcome, error) {
-	auth := r.store.Auth(account.ID)
-	client, err := r.newClient(auth.Cookies)
+func (r *Runner) reconcileDailyClaim(ctx context.Context, accountID string, action state.Action) (DailyClaimOutcome, error) {
+	sess, client, err := r.acquireLotteryForAction(ctx, accountID)
 	if err != nil {
 		return DailyClaimOutcome{}, err
 	}
-	auth, lotteryToken, err := r.ensureLotteryToken(ctx, client, account, auth)
-	if err != nil {
-		return DailyClaimOutcome{}, err
-	}
-	dashboard, auth, _, err := r.dashboardWithRecovery(ctx, client, account, auth, lotteryToken)
+	sess, dashboard, err := r.dashboardWithRecovery(ctx, client, accountID, sess)
 	if err != nil {
 		return DailyClaimOutcome{}, err
 	}
 	remaining, ok := dashboard.Remaining()
-	if err := r.store.PutAuth(account.ID, auth); err != nil {
-		return DailyClaimOutcome{}, err
-	}
 	if ok && action.ClaimBeforeRemaining != nil && remaining > *action.ClaimBeforeRemaining {
 		added := remaining - *action.ClaimBeforeRemaining
 		updated, err := r.finishAction(action, func(value *state.Action) {
@@ -196,14 +176,11 @@ func (r *Runner) reconcileDailyClaim(ctx context.Context, account config.Account
 	}, nil
 }
 
-func (r *Runner) reconcileClaimAfterPostError(ctx context.Context, client WebsiteClient, account config.Account, auth state.AuthState, lotteryToken string, action state.Action, before int, cause error) (DailyClaimOutcome, error) {
-	dashboard, auth, _, err := r.dashboardWithRecovery(ctx, client, account, auth, lotteryToken)
+func (r *Runner) reconcileClaimAfterPostError(ctx context.Context, client WebsiteClient, accountID string, sess session, action state.Action, before int, cause error) (DailyClaimOutcome, error) {
+	sess, dashboard, err := r.dashboardWithRecovery(ctx, client, accountID, sess)
 	if err == nil {
 		remaining, ok := dashboard.Remaining()
 		if ok {
-			if err := r.store.PutAuth(account.ID, auth); err != nil {
-				return DailyClaimOutcome{}, err
-			}
 			if remaining > before {
 				added := remaining - before
 				updated, updateErr := r.finishAction(action, func(value *state.Action) {
@@ -253,16 +230,13 @@ func (r *Runner) reconcileClaimAfterPostError(ctx context.Context, client Websit
 	if updateErr != nil {
 		return DailyClaimOutcome{}, updateErr
 	}
-	if putErr := r.store.PutAuth(account.ID, auth); putErr != nil {
-		return DailyClaimOutcome{}, putErr
-	}
 	return DailyClaimOutcome{Action: updated}, nil
 }
 
 func (r *Runner) recordDailyClaimPreflightError(action state.Action, cause error) (DailyClaimOutcome, error) {
 	updated, err := r.finishAction(action, func(value *state.Action) {
 		value.Status = state.ActionFailed
-		value.Retryable = true
+		value.Retryable = authRetryable(cause)
 		value.SideEffectStarted = false
 		value.Message = safeError(cause)
 		value.LastError = value.Message
@@ -271,6 +245,26 @@ func (r *Runner) recordDailyClaimPreflightError(action state.Action, cause error
 		return DailyClaimOutcome{}, err
 	}
 	return DailyClaimOutcome{Action: updated}, nil
+}
+
+// acquireLotteryForAction obtains a lottery session plus a matching client
+// for a side-effecting action.
+func (r *Runner) acquireLotteryForAction(ctx context.Context, accountID string) (session, WebsiteClient, error) {
+	sess, err := r.acquire(ctx, accountID, auth.SideEffect, auth.SessionLottery)
+	if err != nil {
+		return session{}, nil, err
+	}
+	client, err := r.clientFor(sess)
+	if err != nil {
+		return session{}, nil, err
+	}
+	return sess, client, nil
+}
+
+// dashboardForClaim fetches the pre-claim dashboard with auth recovery.
+func (r *Runner) dashboardForClaim(ctx context.Context, client WebsiteClient, accountID string, sess session) (lottery.Dashboard, session, error) {
+	sess, dashboard, err := r.dashboardWithRecovery(ctx, client, accountID, sess)
+	return dashboard, sess, err
 }
 
 func dailyClaimRecordedOutcome(action state.Action) DailyClaimOutcome {

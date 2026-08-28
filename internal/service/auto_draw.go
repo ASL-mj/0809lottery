@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"skyeapi/lottery-bot/internal/auth"
 	"skyeapi/lottery-bot/internal/config"
 	"skyeapi/lottery-bot/internal/lottery"
 	"skyeapi/lottery-bot/internal/state"
@@ -53,19 +54,19 @@ type AutoDrawScheduler struct {
 	operationTimeout time.Duration
 }
 
-func NewAutoDrawScheduler(cfg config.Config, store *state.Store) *AutoDrawScheduler {
+func NewAutoDrawScheduler(cfg config.Config, store *state.Store, broker *auth.Broker) *AutoDrawScheduler {
 	accounts := make([]config.Account, 0, len(cfg.Accounts))
 	for _, account := range cfg.Accounts {
 		accounts = append(accounts, account)
 	}
 	sort.Slice(accounts, func(i, j int) bool { return accounts[i].ID < accounts[j].ID })
-	runner := NewRunner(cfg, store)
+	runner := NewRunner(cfg, store, broker)
 	return &AutoDrawScheduler{
 		store:            store,
 		accounts:         accounts,
 		now:              time.Now,
 		randomOffset:     randomSecondOffset,
-		draw:             runner.DrawAvailable,
+		draw:             runner.DrawAvailableScheduled,
 		tickInterval:     autoDrawTickInterval,
 		operationTimeout: autoDrawOperationWindow,
 	}

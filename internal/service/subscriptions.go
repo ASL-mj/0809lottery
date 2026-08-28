@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"skyeapi/lottery-bot/internal/auth"
 	"skyeapi/lottery-bot/internal/lottery"
 )
 
@@ -108,38 +109,38 @@ func (r *Runner) subscriptionAccountIDs(value string) ([]string, error) {
 }
 
 func (r *Runner) queryAccountSubscriptions(ctx context.Context, accountID string) (AccountSubscriptionReport, lottery.StatusSettings, bool) {
-	account, err := r.account(accountID)
-	if err != nil {
+	if _, err := r.account(accountID); err != nil {
 		return AccountSubscriptionReport{Account: accountID, QueryError: safeError(err)}, lottery.StatusSettings{}, false
 	}
-	report := AccountSubscriptionReport{Account: account.Username}
+	report := AccountSubscriptionReport{Account: accountID}
 
-	auth := r.store.Auth(account.ID)
-	client, err := r.newClient(auth.Cookies)
+	sess, err := r.acquire(ctx, accountID, auth.ReadOnly, auth.SessionParent)
+	if err != nil {
+		report.QueryError = safeError(err)
+		return report, lottery.StatusSettings{}, false
+	}
+	client, err := r.clientFor(sess)
 	if err != nil {
 		report.QueryError = safeError(fmt.Errorf("create website client: %w", err))
 		return report, lottery.StatusSettings{}, false
 	}
-	auth, parentToken, err := r.ensureParentToken(ctx, client, account, auth)
-	if err != nil {
-		report.QueryError = safeError(err)
-		return report, lottery.StatusSettings{}, false
-	}
 
-	plans, subscriptions, settings, settingsOK, err := fetchSubscriptionData(ctx, client, parentToken)
+	plans, subscriptions, settings, settingsOK, err := fetchSubscriptionData(ctx, client, sess.token)
 	if err != nil {
 		if subscriptionAuthError(err) {
-			auth, parentToken, err = r.refreshParentToken(ctx, client, account, auth, parentToken)
-			if err == nil {
-				plans, subscriptions, settings, settingsOK, err = fetchSubscriptionData(ctx, client, parentToken)
+			renewed, renewErr := r.renewParent(ctx, accountID, sess.token)
+			if renewErr == nil {
+				if retryClient, clientErr := r.clientFor(renewed); clientErr == nil {
+					plans, subscriptions, settings, settingsOK, err = fetchSubscriptionData(ctx, retryClient, renewed.token)
+				} else {
+					err = clientErr
+				}
+			} else {
+				err = renewErr
 			}
 		}
 	}
 	if err != nil {
-		report.QueryError = safeError(err)
-		return report, settings, settingsOK
-	}
-	if err := r.store.PutAuth(account.ID, auth); err != nil {
 		report.QueryError = safeError(err)
 		return report, settings, settingsOK
 	}

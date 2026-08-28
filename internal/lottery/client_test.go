@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"skyeapi/lottery-bot/internal/config"
 	"skyeapi/lottery-bot/internal/state"
 )
 
@@ -67,7 +66,7 @@ func TestLoginBridgeAndDraw(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}
-	login, err := client.Login(context.Background(), config.Account{Username: "user", Password: "password"})
+	login, err := client.Login(context.Background(), Credentials{Username: "user", Password: "password"})
 	if err != nil || login.UserID != 42 || login.AccessToken != "parent-token" {
 		t.Fatalf("Login() = %#v, %v", login, err)
 	}

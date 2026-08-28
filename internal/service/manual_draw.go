@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"skyeapi/lottery-bot/internal/config"
+	"skyeapi/lottery-bot/internal/auth"
 	"skyeapi/lottery-bot/internal/lottery"
 	"skyeapi/lottery-bot/internal/state"
 )
@@ -19,28 +19,33 @@ type DrawAvailableOutcome struct {
 	Message         string
 }
 
-func (r *Runner) DrawAvailable(ctx context.Context, accountID, idempotencyKey string) (DrawAvailableOutcome, error) {
+// DrawAvailable performs one idempotent manual draw. Callers may override the
+// authentication intent: the scheduler uses auth.ScheduledAutomation while web
+// requests default to auth.SideEffect.
+func (r *Runner) DrawAvailable(ctx context.Context, accountID, idempotencyKey string, intents ...auth.Intent) (DrawAvailableOutcome, error) {
 	if strings.TrimSpace(idempotencyKey) == "" {
 		return DrawAvailableOutcome{}, fmt.Errorf("手动抽奖幂等键不能为空")
 	}
+	intent := auth.SideEffect
+	if len(intents) > 0 {
+		intent = intents[0]
+	}
 
-	account, err := r.account(accountID)
-	if err != nil {
+	if _, err := r.account(accountID); err != nil {
 		return DrawAvailableOutcome{}, err
 	}
-	release := r.store.LockAction(account.ID, r.today(), state.ActionKind("manual_draw"))
+	release := r.store.LockAction(accountID, r.today(), state.ActionKind("manual_draw"))
 	defer release()
 
-	auth := r.store.Auth(account.ID)
-	client, err := r.newClient(auth.Cookies)
-	if err != nil {
-		return DrawAvailableOutcome{}, fmt.Errorf("create website client: %w", err)
-	}
-	auth, lotteryToken, err := r.ensureLotteryToken(ctx, client, account, auth)
+	sess, err := r.acquire(ctx, accountID, intent, auth.SessionLottery)
 	if err != nil {
 		return DrawAvailableOutcome{}, err
 	}
-	dashboard, auth, lotteryToken, err := r.dashboardWithRecovery(ctx, client, account, auth, lotteryToken)
+	client, err := r.clientFor(sess)
+	if err != nil {
+		return DrawAvailableOutcome{}, err
+	}
+	sess, dashboard, err := r.dashboardWithRecovery(ctx, client, accountID, sess)
 	if err != nil {
 		return DrawAvailableOutcome{}, err
 	}
@@ -49,7 +54,6 @@ func (r *Runner) DrawAvailable(ctx context.Context, accountID, idempotencyKey st
 		return DrawAvailableOutcome{}, fmt.Errorf("抽奖次数接口没有返回 remaining")
 	}
 	if remaining <= 0 {
-		r.putManualDrawAuthBestEffort(account.ID, auth)
 		return DrawAvailableOutcome{
 			Skipped:         true,
 			RemainingBefore: remaining,
@@ -57,12 +61,30 @@ func (r *Runner) DrawAvailable(ctx context.Context, accountID, idempotencyKey st
 		}, nil
 	}
 
-	result, auth, err := r.drawDirectWithRecovery(ctx, client, account, auth, lotteryToken, idempotencyKey)
+	result, err := client.Draw(ctx, sess.token, idempotencyKey)
 	if err != nil {
-		return DrawAvailableOutcome{}, err
+		if lottery.IsStatus(err, 401) || lottery.IsStatus(err, 403) {
+			sess, err = r.renewLottery(ctx, accountID, sess.token)
+			if err == nil {
+				retryClient, clientErr := r.clientFor(sess)
+				if clientErr == nil {
+					result, err = retryClient.Draw(ctx, sess.token, idempotencyKey)
+				} else {
+					err = clientErr
+				}
+			}
+		} else if lottery.IsTransient(err) {
+			if waitErr := r.wait(ctx, 2*time.Second); waitErr == nil {
+				result, err = client.Draw(ctx, sess.token, idempotencyKey)
+			} else {
+				err = waitErr
+			}
+		}
+		if err != nil {
+			return DrawAvailableOutcome{}, err
+		}
 	}
-	quotaDeltaUSD, auth := r.quotaDeltaUSDForDraw(ctx, client, account, auth, result)
-	r.putManualDrawAuthBestEffort(account.ID, auth)
+	quotaDeltaUSD := r.quotaDeltaUSDForDraw(ctx, client, accountID, result)
 	return DrawAvailableOutcome{
 		RemainingBefore: remaining,
 		Result:          &result,
@@ -71,74 +93,42 @@ func (r *Runner) DrawAvailable(ctx context.Context, accountID, idempotencyKey st
 	}, nil
 }
 
-func (r *Runner) drawDirectWithRecovery(ctx context.Context, client WebsiteClient, account config.Account, auth state.AuthState, lotteryToken, idempotencyKey string) (lottery.DrawResult, state.AuthState, error) {
-	result, err := client.Draw(ctx, lotteryToken, idempotencyKey)
-	if err == nil {
-		return result, auth, nil
-	}
-	if lottery.IsStatus(err, 401) || lottery.IsStatus(err, 403) {
-		auth.LotteryAccessToken = ""
-		auth.LotteryAccessExpiresAt = time.Time{}
-		auth, lotteryToken, err = r.ensureLotteryToken(ctx, client, account, auth)
-		if err != nil {
-			return lottery.DrawResult{}, auth, err
-		}
-		result, err = client.Draw(ctx, lotteryToken, idempotencyKey)
-		return result, auth, err
-	}
-	if !lottery.IsTransient(err) {
-		return lottery.DrawResult{}, auth, err
-	}
-	if err := r.wait(ctx, 2*time.Second); err != nil {
-		return lottery.DrawResult{}, auth, err
-	}
-	result, err = client.Draw(ctx, lotteryToken, idempotencyKey)
-	return result, auth, err
+// DrawAvailableScheduled is the scheduler's entry point; it runs with the
+// ScheduledAutomation intent so it can never trigger a password login.
+func (r *Runner) DrawAvailableScheduled(ctx context.Context, accountID, idempotencyKey string) (DrawAvailableOutcome, error) {
+	return r.DrawAvailable(ctx, accountID, idempotencyKey, auth.ScheduledAutomation)
 }
 
-func (r *Runner) quotaDeltaUSDForDraw(ctx context.Context, client WebsiteClient, account config.Account, auth state.AuthState, result lottery.DrawResult) (*float64, state.AuthState) {
+// quotaDeltaUSDForDraw resolves the dollar value of a draw reward on a
+// best-effort basis; a failing parent session never invalidates the draw.
+func (r *Runner) quotaDeltaUSDForDraw(ctx context.Context, client WebsiteClient, accountID string, result lottery.DrawResult) *float64 {
 	if result.Effect.QuotaDelta == 0 {
-		return nil, auth
+		return nil
 	}
-
-	auth, parentToken, ok := r.ensureParentTokenForDrawStatus(ctx, client, account, auth)
-	if !ok {
-		return nil, auth
-	}
-	settings, err := client.Status(ctx, parentToken)
-	if err != nil && subscriptionAuthError(err) {
-		auth, parentToken, err = r.refreshParentToken(ctx, client, account, auth, parentToken)
-		ok = err == nil
-		if !ok {
-			return nil, auth
-		}
-		settings, err = client.Status(ctx, parentToken)
-	}
+	sess, err := r.acquire(ctx, accountID, auth.ReadOnly, auth.SessionParent)
 	if err != nil {
-		return nil, auth
+		return nil
+	}
+	settings, statusErr := client.Status(ctx, sess.token)
+	if statusErr != nil && subscriptionAuthError(statusErr) {
+		renewed, renewErr := r.renewParent(ctx, accountID, sess.token)
+		if renewErr != nil {
+			return nil
+		}
+		retryClient, clientErr := r.clientFor(renewed)
+		if clientErr != nil {
+			return nil
+		}
+		settings, statusErr = retryClient.Status(ctx, renewed.token)
+		sess = renewed
+		client = retryClient
+	}
+	if statusErr != nil {
+		return nil
 	}
 	quotaDeltaUSD, ok := QuotaAmountUSD(result.Effect.QuotaDelta, settings)
 	if !ok {
-		return nil, auth
+		return nil
 	}
-	return quotaDeltaUSD, auth
-}
-
-func (r *Runner) ensureParentTokenForDrawStatus(ctx context.Context, client WebsiteClient, account config.Account, auth state.AuthState) (state.AuthState, string, bool) {
-	originalLotteryToken := auth.LotteryAccessToken
-	originalLotteryExpiry := auth.LotteryAccessExpiresAt
-
-	refreshedAuth, parentToken, err := r.ensureParentToken(ctx, client, account, auth)
-	if err != nil {
-		return auth, "", false
-	}
-	if strings.TrimSpace(refreshedAuth.LotteryAccessToken) == "" && strings.TrimSpace(originalLotteryToken) != "" {
-		refreshedAuth.LotteryAccessToken = originalLotteryToken
-		refreshedAuth.LotteryAccessExpiresAt = originalLotteryExpiry
-	}
-	return refreshedAuth, parentToken, true
-}
-
-func (r *Runner) putManualDrawAuthBestEffort(accountID string, auth state.AuthState) {
-	_ = r.store.PutAuth(accountID, auth)
+	return quotaDeltaUSD
 }

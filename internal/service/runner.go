@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"skyeapi/lottery-bot/internal/auth"
 	"skyeapi/lottery-bot/internal/config"
 	"skyeapi/lottery-bot/internal/lottery"
 	"skyeapi/lottery-bot/internal/state"
@@ -21,10 +22,10 @@ var shanghaiLocation = func() *time.Location {
 	return location
 }()
 
+// WebsiteClient is the business surface the runner drives. Authentication
+// (login, refresh, bridge) lives exclusively in the auth broker.
 type WebsiteClient interface {
-	Login(context.Context, config.Account) (lottery.LoginResult, error)
-	Refresh(context.Context) (lottery.LoginResult, error)
-	Bridge(context.Context, string, int64) (lottery.BridgeResult, error)
+	UserSelf(context.Context, string) (lottery.UserUsage, error)
 	Draw(context.Context, string, string) (lottery.DrawResult, error)
 	PurchaseDraw(context.Context, string, string) (lottery.OperationResult, error)
 	UnlockDrawLimit(context.Context, string, string) (lottery.OperationResult, error)
@@ -33,20 +34,26 @@ type WebsiteClient interface {
 	Checkin(context.Context, string) (lottery.CheckinResult, error)
 	CheckinStatus(context.Context, string) (lottery.CheckinStatus, error)
 	CheckinEligibility(context.Context, string, int64) (lottery.CheckinEligibility, error)
-	UserSelf(context.Context, string) (lottery.UserUsage, error)
 	SubscriptionPlans(context.Context, string) (map[int]string, error)
 	SubscriptionSelf(context.Context, string) (lottery.SubscriptionSelf, error)
 	Status(context.Context, string) (lottery.StatusSettings, error)
-	Cookies() []state.Cookie
 }
 
 type ClientFactory func([]state.Cookie) (WebsiteClient, error)
 
+// session is one acquired broker session: the token plus the cookies the
+// caller should use for business requests.
+type session struct {
+	token   string
+	cookies []state.Cookie
+	userID  int64
+}
+
 type Runner struct {
 	config    config.Config
 	store     *state.Store
+	broker    *auth.Broker
 	newClient ClientFactory
-	putAuth   func(string, state.AuthState) error
 	now       func() time.Time
 	wait      func(context.Context, time.Duration) error
 }
@@ -61,42 +68,76 @@ type CheckinStatusReport struct {
 	TodayQuotaAwardedUSD *float64
 }
 
-func NewRunner(cfg config.Config, store *state.Store) *Runner {
-	return NewRunnerWithFactory(cfg, store, func(cookies []state.Cookie) (WebsiteClient, error) {
+func NewRunner(cfg config.Config, store *state.Store, broker *auth.Broker) *Runner {
+	return NewRunnerWithFactory(cfg, store, broker, func(cookies []state.Cookie) (WebsiteClient, error) {
 		return lottery.NewClient(cfg.BaseURL, cfg.UserAgent, cookies)
 	})
 }
 
-func NewRunnerWithFactory(cfg config.Config, store *state.Store, factory ClientFactory) *Runner {
+func NewRunnerWithFactory(cfg config.Config, store *state.Store, broker *auth.Broker, factory ClientFactory) *Runner {
 	return &Runner{
 		config:    cfg,
 		store:     store,
+		broker:    broker,
 		newClient: factory,
-		putAuth:   store.PutAuth,
 		now:       time.Now,
 		wait:      wait,
 	}
 }
 
+func (r *Runner) acquire(ctx context.Context, accountID string, intent auth.Intent, kind auth.SessionKind) (session, error) {
+	acquired, err := r.broker.Acquire(ctx, accountID, intent, kind)
+	if err != nil {
+		return session{}, err
+	}
+	return session{token: acquired.Token, cookies: acquired.Cookies, userID: acquired.UserID}, nil
+}
+
+func (r *Runner) renewParent(ctx context.Context, accountID, rejected string) (session, error) {
+	acquired, err := r.broker.RenewParent(ctx, accountID, rejected)
+	if err != nil {
+		return session{}, err
+	}
+	return session{token: acquired.Token, cookies: acquired.Cookies, userID: acquired.UserID}, nil
+}
+
+func (r *Runner) renewLottery(ctx context.Context, accountID, rejected string) (session, error) {
+	acquired, err := r.broker.RenewLottery(ctx, accountID, rejected)
+	if err != nil {
+		return session{}, err
+	}
+	return session{token: acquired.Token, cookies: acquired.Cookies, userID: acquired.UserID}, nil
+}
+
+func (r *Runner) clientFor(sess session) (WebsiteClient, error) {
+	client, err := r.newClient(sess.cookies)
+	if err != nil {
+		return nil, fmt.Errorf("create website client: %w", err)
+	}
+	return client, nil
+}
+
+// authRetryable reports whether an authentication failure can resolve without
+// the user reauthenticating. Only explicit reauthentication requirements are
+// terminal; transient auth problems stay retryable.
+func authRetryable(err error) bool {
+	return !errors.Is(err, auth.ErrReauthRequired)
+}
+
 func (r *Runner) Dashboard(ctx context.Context, accountID string) (lottery.Dashboard, error) {
-	account, err := r.account(accountID)
+	if _, err := r.account(accountID); err != nil {
+		return lottery.Dashboard{}, err
+	}
+	sess, err := r.acquire(ctx, accountID, auth.ReadOnly, auth.SessionLottery)
 	if err != nil {
 		return lottery.Dashboard{}, err
 	}
-	auth := r.store.Auth(account.ID)
-	client, err := r.newClient(auth.Cookies)
-	if err != nil {
-		return lottery.Dashboard{}, fmt.Errorf("create website client: %w", err)
-	}
-	auth, token, err := r.ensureLotteryToken(ctx, client, account, auth)
+	client, err := r.clientFor(sess)
 	if err != nil {
 		return lottery.Dashboard{}, err
 	}
-	dashboard, auth, _, err := r.dashboardWithRecovery(ctx, client, account, auth, token)
+	sess, dashboard, err := r.dashboardWithRecovery(ctx, client, accountID, sess)
 	if err != nil {
-		return lottery.Dashboard{}, err
-	}
-	if err := r.store.PutAuth(account.ID, auth); err != nil {
 		return lottery.Dashboard{}, err
 	}
 	return dashboard, nil
@@ -111,55 +152,22 @@ func (r *Runner) Checkin(ctx context.Context, accountID string) (ActionOutcome, 
 	if err != nil {
 		return ActionOutcome{}, err
 	}
-	auth := r.store.Auth(account.ID)
-	var client WebsiteClient
-	var parentToken string
 	if !created {
 		switch action.Status {
 		case state.ActionCompleted, state.ActionUnknown:
 			return ActionOutcome{Action: action, AlreadyRecorded: true}, nil
 		case state.ActionFailed:
-			client, err = r.newClient(auth.Cookies)
-			if err == nil {
-				auth, parentToken, err = r.ensureParentToken(ctx, client, account, auth)
+			newAction, outcome, err := r.reconcileFailedCheckin(ctx, account.ID, action)
+			if err != nil {
+				return ActionOutcome{}, err
 			}
-			if err == nil {
-				var status lottery.CheckinStatus
-				var settings lottery.StatusSettings
-				status, settings, auth, parentToken, err = r.fetchCheckinDisplayStatus(ctx, client, account, auth, parentToken)
-				if err == nil {
-					if putErr := r.store.PutAuth(account.ID, auth); putErr != nil {
-						return ActionOutcome{}, putErr
-					}
-					if status.CheckedInToday {
-						updated, updateErr := r.finishAction(action, func(value *state.Action) {
-							value.Status = state.ActionCompleted
-							value.Retryable = false
-							value.LastError = ""
-							value.Message = "今日已签到"
-							if status.TodayQuotaAwarded != nil {
-								quotaAwarded := *status.TodayQuotaAwarded
-								value.CheckinQuotaAwarded = &quotaAwarded
-							}
-							if status.TodayQuotaAwarded != nil {
-								rewardUSD, ok := QuotaAmountUSD(*status.TodayQuotaAwarded, settings)
-								if ok {
-									value.CheckinQuotaAwardedUSD = rewardUSD
-									value.Message = fmt.Sprintf("今日已签到，获得额度：$%.2f", *rewardUSD)
-								}
-							}
-						})
-						if updateErr != nil {
-							return ActionOutcome{}, updateErr
-						}
-						return ActionOutcome{Action: updated, AlreadyRecorded: true}, nil
-					}
-					action, err = r.resetFailedCheckinAction(action)
-					if err != nil {
-						return ActionOutcome{}, err
-					}
-					break
-				}
+			if outcome != nil {
+				return *outcome, nil
+			}
+			if newAction.Status == state.ActionPending && !newAction.SideEffectStarted {
+				// Upstream shows the check-in did not happen; run it fresh.
+				action = newAction
+				break
 			}
 			if action.Retryable && !action.SideEffectStarted {
 				action, err = r.store.ResetRetryableAction(action.Key)
@@ -174,44 +182,51 @@ func (r *Runner) Checkin(ctx context.Context, accountID string) (ActionOutcome, 
 		}
 	}
 
-	if client == nil {
-		client, err = r.newClient(auth.Cookies)
-		if err != nil {
-			return r.recordActionError(action, err, false, true)
-		}
+	sess, client, err := r.acquireParentForAction(ctx, account.ID)
+	if err != nil {
+		return r.recordActionError(action, err, false, authRetryable(err))
 	}
-	if strings.TrimSpace(parentToken) == "" {
-		auth, parentToken, err = r.ensureParentToken(ctx, client, account, auth)
-		if err != nil {
-			return r.recordActionError(action, err, false, true)
-		}
-	}
-	if auth.UserID > 0 {
-		var eligibility lottery.CheckinEligibility
-		eligibility, auth, parentToken, err = r.checkinEligibilityWithRecovery(ctx, client, account, auth, parentToken)
-		if err != nil && subscriptionAuthError(err) {
-			return r.recordActionError(action, err, false, true)
-		}
-		if err == nil && !eligibility.CanCheckin {
+	if sess.userID > 0 {
+		eligibility, renewedSess, eligErr := r.checkinEligibilityWithRecovery(ctx, client, account.ID, sess)
+		switch {
+		case eligErr != nil:
+			// A failed eligibility precheck only blocks the check-in when the
+			// session itself is broken; other precheck errors are soft.
+			if subscriptionAuthError(eligErr) || errors.Is(eligErr, auth.ErrReauthRequired) || errors.Is(eligErr, auth.ErrAuthUnavailable) {
+				return r.recordActionError(action, eligErr, false, authRetryable(eligErr))
+			}
+		case !eligibility.CanCheckin:
 			message := "今日活跃度不足，暂时无法换算签到所需额度"
-			if settings, settingsErr := client.Status(ctx, parentToken); settingsErr == nil {
+			if settings, settingsErr := client.Status(ctx, sess.token); settingsErr == nil {
 				if remainingUSD, ok := QuotaAmountUSD(eligibility.Remaining, settings); ok {
 					message = fmt.Sprintf("今日活跃度不足，距离签到还需消耗 $%.2f", *remainingUSD)
 				}
 			}
 			return r.recordActionError(action, errors.New(message), false, true)
+		default:
+			sess = renewedSess
 		}
 	}
 	action, err = r.startAction(action)
 	if err != nil {
 		return ActionOutcome{}, err
 	}
-	result, auth, err := r.checkinWithRecovery(ctx, client, account, auth, parentToken)
+	result, err := client.Checkin(ctx, sess.token)
 	if err != nil {
-		return r.recordActionError(action, err, isUnknown(err), false)
-	}
-	if err := r.store.PutAuth(account.ID, auth); err != nil {
-		return ActionOutcome{}, err
+		if subscriptionAuthError(err) {
+			sess, err = r.renewParent(ctx, account.ID, sess.token)
+			if err == nil {
+				client, clientErr := r.clientFor(sess)
+				if clientErr == nil {
+					result, err = client.Checkin(ctx, sess.token)
+				} else {
+					err = clientErr
+				}
+			}
+		}
+		if err != nil {
+			return r.recordActionError(action, err, isUnknown(err), false)
+		}
 	}
 	if !result.Success {
 		updated, updateErr := r.finishAction(action, func(value *state.Action) {
@@ -240,6 +255,62 @@ func (r *Runner) Checkin(ctx context.Context, accountID string) (ActionOutcome, 
 	return ActionOutcome{Action: updated}, nil
 }
 
+// reconcileFailedCheckin checks the upstream truth for a locally failed
+// check-in. A nil outcome means the caller should retry the action itself;
+// newAction then carries the reopened (pending) action.
+func (r *Runner) reconcileFailedCheckin(ctx context.Context, accountID string, action state.Action) (state.Action, *ActionOutcome, error) {
+	sess, err := r.acquire(ctx, accountID, auth.ReadOnly, auth.SessionParent)
+	if err != nil {
+		return action, nil, nil
+	}
+	client, err := r.clientFor(sess)
+	if err != nil {
+		return action, nil, nil
+	}
+	status, settings, err := fetchCheckinDisplayStatus(ctx, client, sess.token)
+	if err != nil {
+		if subscriptionAuthError(err) {
+			renewed, renewErr := r.renewParent(ctx, accountID, sess.token)
+			if renewErr == nil {
+				if retryClient, clientErr := r.clientFor(renewed); clientErr == nil {
+					if retryStatus, retrySettings, statusErr := fetchCheckinDisplayStatus(ctx, retryClient, renewed.token); statusErr == nil {
+						status, settings = retryStatus, retrySettings
+						err = nil
+					}
+				}
+			}
+		}
+		if err != nil {
+			return action, nil, nil
+		}
+	}
+	if status.CheckedInToday {
+		updated, updateErr := r.finishAction(action, func(value *state.Action) {
+			value.Status = state.ActionCompleted
+			value.Retryable = false
+			value.LastError = ""
+			value.Message = "今日已签到"
+			if status.TodayQuotaAwarded != nil {
+				quotaAwarded := *status.TodayQuotaAwarded
+				value.CheckinQuotaAwarded = &quotaAwarded
+				if rewardUSD, ok := QuotaAmountUSD(*status.TodayQuotaAwarded, settings); ok {
+					value.CheckinQuotaAwardedUSD = rewardUSD
+					value.Message = fmt.Sprintf("今日已签到，获得额度：$%.2f", *rewardUSD)
+				}
+			}
+		})
+		if updateErr != nil {
+			return action, nil, updateErr
+		}
+		return action, &ActionOutcome{Action: updated, AlreadyRecorded: true}, nil
+	}
+	reset, resetErr := r.resetFailedCheckinAction(action)
+	if resetErr != nil {
+		return action, nil, resetErr
+	}
+	return reset, nil, nil
+}
+
 func (r *Runner) resetFailedCheckinAction(action state.Action) (state.Action, error) {
 	return r.store.UpdateAction(action.Key, func(value *state.Action) {
 		value.Status = state.ActionPending
@@ -253,24 +324,19 @@ func (r *Runner) resetFailedCheckinAction(action state.Action) (state.Action, er
 }
 
 func (r *Runner) CheckinStatus(ctx context.Context, accountID string) (CheckinStatusReport, error) {
-	account, err := r.account(accountID)
+	if _, err := r.account(accountID); err != nil {
+		return CheckinStatusReport{}, err
+	}
+	sess, err := r.acquire(ctx, accountID, auth.ReadOnly, auth.SessionParent)
 	if err != nil {
 		return CheckinStatusReport{}, err
 	}
-	auth := r.store.Auth(account.ID)
-	client, err := r.newClient(auth.Cookies)
-	if err != nil {
-		return CheckinStatusReport{}, fmt.Errorf("create website client: %w", err)
-	}
-	auth, parentToken, err := r.ensureParentToken(ctx, client, account, auth)
+	client, err := r.clientFor(sess)
 	if err != nil {
 		return CheckinStatusReport{}, err
 	}
-	status, settings, auth, _, err := r.fetchCheckinDisplayStatus(ctx, client, account, auth, parentToken)
+	status, settings, sess, err := r.checkinDisplayStatusWithRecovery(ctx, client, accountID, sess)
 	if err != nil {
-		return CheckinStatusReport{}, err
-	}
-	if err := r.store.PutAuth(account.ID, auth); err != nil {
 		return CheckinStatusReport{}, err
 	}
 	report := CheckinStatusReport{CheckedInToday: status.CheckedInToday}
@@ -281,44 +347,50 @@ func (r *Runner) CheckinStatus(ctx context.Context, accountID string) (CheckinSt
 }
 
 func (r *Runner) QueryUsage(ctx context.Context, accountID string) (lottery.UserUsage, error) {
-	account, err := r.account(accountID)
+	if _, err := r.account(accountID); err != nil {
+		return lottery.UserUsage{}, err
+	}
+	sess, err := r.acquire(ctx, accountID, auth.ReadOnly, auth.SessionParent)
 	if err != nil {
 		return lottery.UserUsage{}, err
 	}
-	auth := r.store.Auth(account.ID)
-	client, err := r.newClient(auth.Cookies)
-	if err != nil {
-		return lottery.UserUsage{}, fmt.Errorf("create website client: %w", err)
-	}
-	auth, parentToken, err := r.ensureParentToken(ctx, client, account, auth)
+	client, err := r.clientFor(sess)
 	if err != nil {
 		return lottery.UserUsage{}, err
 	}
-	usage, err := client.UserSelf(ctx, parentToken)
+	usage, err := client.UserSelf(ctx, sess.token)
 	if err != nil {
 		if !lottery.IsStatus(err, 401) {
 			return lottery.UserUsage{}, err
 		}
-		auth, parentToken, err = r.refreshParentToken(ctx, client, account, auth, parentToken)
+		sess, err = r.renewParent(ctx, accountID, sess.token)
 		if err != nil {
 			return lottery.UserUsage{}, err
 		}
-		usage, err = client.UserSelf(ctx, parentToken)
+		client, err = r.clientFor(sess)
+		if err != nil {
+			return lottery.UserUsage{}, err
+		}
+		usage, err = client.UserSelf(ctx, sess.token)
 		if err != nil {
 			return lottery.UserUsage{}, err
 		}
 	}
-	settings, statusErr := client.Status(ctx, parentToken)
+	settings, statusErr := client.Status(ctx, sess.token)
 	if statusErr != nil && subscriptionAuthError(statusErr) {
-		auth, parentToken, err = r.refreshParentToken(ctx, client, account, auth, parentToken)
+		sess, err = r.renewParent(ctx, accountID, sess.token)
 		if err != nil {
 			return lottery.UserUsage{}, err
 		}
-		usage, err = client.UserSelf(ctx, parentToken)
+		client, err = r.clientFor(sess)
 		if err != nil {
 			return lottery.UserUsage{}, err
 		}
-		settings, statusErr = client.Status(ctx, parentToken)
+		usage, err = client.UserSelf(ctx, sess.token)
+		if err != nil {
+			return lottery.UserUsage{}, err
+		}
+		settings, statusErr = client.Status(ctx, sess.token)
 	}
 	if statusErr == nil {
 		usage = normalizeUsage(usage, settings)
@@ -326,14 +398,11 @@ func (r *Runner) QueryUsage(ctx context.Context, accountID string) (lottery.User
 		usage.QuotaConversionAvailable = false
 		usage.QuotaConversionError = "无法获取美元换算配置"
 	}
-	if err := r.store.PutAuth(account.ID, auth); err != nil {
-		return lottery.UserUsage{}, err
-	}
 	payload, err := json.Marshal(usage)
 	if err != nil {
 		return lottery.UserUsage{}, err
 	}
-	if err := r.store.PutSnapshot(state.Snapshot{AccountID: account.ID, Kind: "usage", Data: payload, QueriedAt: r.now().UTC()}); err != nil {
+	if err := r.store.PutSnapshot(state.Snapshot{AccountID: accountID, Kind: "usage", Data: payload, QueriedAt: r.now().UTC()}); err != nil {
 		return lottery.UserUsage{}, err
 	}
 	return usage, nil
@@ -370,163 +439,105 @@ func (r *Runner) recordActionError(action state.Action, cause error, unknown, re
 	return ActionOutcome{Action: updated}, nil
 }
 
-func (r *Runner) ensureParentToken(ctx context.Context, client WebsiteClient, account config.Account, auth state.AuthState) (state.AuthState, string, error) {
-	return r.ensureParentTokenAfter(ctx, client, account, auth, "")
-}
-
-func (r *Runner) refreshParentToken(ctx context.Context, client WebsiteClient, account config.Account, auth state.AuthState, rejectedToken string) (state.AuthState, string, error) {
-	return r.ensureParentTokenAfter(ctx, client, account, auth, rejectedToken)
-}
-
-func (r *Runner) ensureParentTokenAfter(ctx context.Context, client WebsiteClient, account config.Account, auth state.AuthState, rejectedToken string) (state.AuthState, string, error) {
-	rejectedToken = strings.TrimSpace(rejectedToken)
-	if rejectedToken == "" && usableToken(auth.ParentAccessToken, auth.ParentAccessExpiresAt, r.now()) {
-		return auth, auth.ParentAccessToken, nil
-	}
-
-	release := r.store.LockAuth(account.ID)
-	defer release()
-
-	// A concurrent request may already have refreshed this account while this
-	// request waited for the lock. Always use that latest persisted state.
-	auth = r.store.Auth(account.ID)
-	if rejectedToken == "" {
-		if usableToken(auth.ParentAccessToken, auth.ParentAccessExpiresAt, r.now()) {
-			return auth, auth.ParentAccessToken, nil
-		}
-	} else if strings.TrimSpace(auth.ParentAccessToken) != rejectedToken && usableToken(auth.ParentAccessToken, auth.ParentAccessExpiresAt, r.now()) {
-		return auth, auth.ParentAccessToken, nil
-	} else if strings.TrimSpace(auth.ParentAccessToken) == rejectedToken {
-		// This exact token has already been rejected by an upstream endpoint, so
-		// do not validate it again. Prefer its refresh cookie instead.
-		auth.ParentAccessToken = ""
-		auth.ParentAccessExpiresAt = time.Time{}
-		auth.LotteryAccessToken = ""
-		auth.LotteryAccessExpiresAt = time.Time{}
-	}
-
-	// The locally stored expiry is only a hint. Verify the cached access token
-	// with the server before creating another login session.
-	if token := strings.TrimSpace(auth.ParentAccessToken); token != "" {
-		if _, err := client.UserSelf(ctx, token); err == nil {
-			auth.Cookies = client.Cookies()
-			if err := r.store.PutAuth(account.ID, auth); err != nil {
-				return state.AuthState{}, "", err
-			}
-			return auth, token, nil
-		} else if !subscriptionAuthError(err) {
-			return state.AuthState{}, "", fmt.Errorf("validate saved session for account %s: %w", account.ID, err)
-		}
-	}
-
-	// A rejected cached token may still have a valid refresh cookie. Refreshing
-	// preserves the existing server session and avoids consuming a device slot.
-	refreshed, err := client.Refresh(ctx)
-	if err == nil {
-		return r.persistParentSession(account.ID, client, auth, refreshed)
-	}
-	if !subscriptionAuthError(err) {
-		return state.AuthState{}, "", fmt.Errorf("refresh saved session for account %s: %w", account.ID, err)
-	}
-
-	// Password login is deliberately the last resort, and is attempted once
-	// for this authentication operation only.
-	login, err := client.Login(ctx, account)
+// acquireParentForAction obtains a parent session plus a matching client for
+// a side-effecting action.
+func (r *Runner) acquireParentForAction(ctx context.Context, accountID string) (session, WebsiteClient, error) {
+	sess, err := r.acquire(ctx, accountID, auth.SideEffect, auth.SessionParent)
 	if err != nil {
-		return state.AuthState{}, "", fmt.Errorf("login account %s: %w", account.ID, err)
+		return session{}, nil, err
 	}
-	return r.persistParentSession(account.ID, client, auth, login)
+	client, err := r.clientFor(sess)
+	if err != nil {
+		return session{}, nil, err
+	}
+	return sess, client, nil
 }
 
-func (r *Runner) dashboardWithRecovery(ctx context.Context, client WebsiteClient, account config.Account, auth state.AuthState, lotteryToken string) (lottery.Dashboard, state.AuthState, string, error) {
-	dashboard, err := client.Dashboard(ctx, lotteryToken)
+func (r *Runner) dashboardWithRecovery(ctx context.Context, client WebsiteClient, accountID string, sess session) (session, lottery.Dashboard, error) {
+	dashboard, err := client.Dashboard(ctx, sess.token)
 	if err == nil {
-		return dashboard, auth, lotteryToken, nil
+		return sess, dashboard, nil
 	}
 	if lottery.IsStatus(err, 401) || lottery.IsStatus(err, 403) {
-		auth.LotteryAccessToken = ""
-		auth.LotteryAccessExpiresAt = time.Time{}
-		auth, lotteryToken, err = r.ensureLotteryToken(ctx, client, account, auth)
-		if err != nil {
-			return lottery.Dashboard{}, auth, lotteryToken, err
+		renewed, renewErr := r.renewLottery(ctx, accountID, sess.token)
+		if renewErr != nil {
+			return sess, lottery.Dashboard{}, renewErr
 		}
-		dashboard, err = client.Dashboard(ctx, lotteryToken)
-		return dashboard, auth, lotteryToken, err
+		retryClient, clientErr := r.clientFor(renewed)
+		if clientErr != nil {
+			return renewed, lottery.Dashboard{}, clientErr
+		}
+		dashboard, err = retryClient.Dashboard(ctx, renewed.token)
+		return renewed, dashboard, err
 	}
 	if !lottery.IsTransient(err) {
-		return lottery.Dashboard{}, auth, lotteryToken, err
+		return sess, lottery.Dashboard{}, err
 	}
 	if err := r.wait(ctx, 2*time.Second); err != nil {
-		return lottery.Dashboard{}, auth, lotteryToken, err
+		return sess, lottery.Dashboard{}, err
 	}
-	dashboard, err = client.Dashboard(ctx, lotteryToken)
-	return dashboard, auth, lotteryToken, err
+	dashboard, err = client.Dashboard(ctx, sess.token)
+	return sess, dashboard, err
 }
 
-func (r *Runner) claimWithRecovery(ctx context.Context, client WebsiteClient, account config.Account, auth state.AuthState, lotteryToken string) (lottery.ClaimResult, state.AuthState, error) {
-	result, err := client.ClaimDaily(ctx, lotteryToken)
+func (r *Runner) claimWithRecovery(ctx context.Context, client WebsiteClient, accountID string, sess session) (lottery.ClaimResult, session, error) {
+	result, err := client.ClaimDaily(ctx, sess.token)
 	if err == nil {
-		return result, auth, nil
+		return result, sess, nil
 	}
 	if !lottery.IsStatus(err, 401) {
-		return lottery.ClaimResult{}, auth, err
+		return lottery.ClaimResult{}, sess, err
 	}
-	auth.LotteryAccessToken = ""
-	auth.LotteryAccessExpiresAt = time.Time{}
-	auth, lotteryToken, err = r.ensureLotteryToken(ctx, client, account, auth)
+	renewed, err := r.renewLottery(ctx, accountID, sess.token)
 	if err != nil {
-		return lottery.ClaimResult{}, auth, err
+		return lottery.ClaimResult{}, sess, err
 	}
-	result, err = client.ClaimDaily(ctx, lotteryToken)
-	return result, auth, err
+	retryClient, clientErr := r.clientFor(renewed)
+	if clientErr != nil {
+		return lottery.ClaimResult{}, renewed, clientErr
+	}
+	result, err = retryClient.ClaimDaily(ctx, renewed.token)
+	return result, renewed, err
 }
 
-func (r *Runner) checkinWithRecovery(ctx context.Context, client WebsiteClient, account config.Account, auth state.AuthState, parentToken string) (lottery.CheckinResult, state.AuthState, error) {
-	result, err := client.Checkin(ctx, parentToken)
+func (r *Runner) checkinEligibilityWithRecovery(ctx context.Context, client WebsiteClient, accountID string, sess session) (lottery.CheckinEligibility, session, error) {
+	eligibility, err := client.CheckinEligibility(ctx, sess.token, sess.userID)
 	if err == nil {
-		return result, auth, nil
+		return eligibility, sess, nil
 	}
 	if !subscriptionAuthError(err) {
-		return lottery.CheckinResult{}, auth, err
+		return lottery.CheckinEligibility{}, sess, err
 	}
-	auth, parentToken, err = r.refreshParentToken(ctx, client, account, auth, parentToken)
+	renewed, err := r.renewParent(ctx, accountID, sess.token)
 	if err != nil {
-		return lottery.CheckinResult{}, auth, err
+		return lottery.CheckinEligibility{}, sess, err
 	}
-	result, err = client.Checkin(ctx, parentToken)
-	return result, auth, err
+	retryClient, clientErr := r.clientFor(renewed)
+	if clientErr != nil {
+		return lottery.CheckinEligibility{}, renewed, clientErr
+	}
+	eligibility, err = retryClient.CheckinEligibility(ctx, renewed.token, renewed.userID)
+	return eligibility, renewed, err
 }
 
-func (r *Runner) checkinEligibilityWithRecovery(ctx context.Context, client WebsiteClient, account config.Account, auth state.AuthState, parentToken string) (lottery.CheckinEligibility, state.AuthState, string, error) {
-	eligibility, err := client.CheckinEligibility(ctx, parentToken, auth.UserID)
+func (r *Runner) checkinDisplayStatusWithRecovery(ctx context.Context, client WebsiteClient, accountID string, sess session) (lottery.CheckinStatus, lottery.StatusSettings, session, error) {
+	status, settings, err := fetchCheckinDisplayStatus(ctx, client, sess.token)
 	if err == nil {
-		return eligibility, auth, parentToken, nil
+		return status, settings, sess, nil
 	}
 	if !subscriptionAuthError(err) {
-		return lottery.CheckinEligibility{}, auth, parentToken, err
+		return lottery.CheckinStatus{}, lottery.StatusSettings{}, sess, err
 	}
-	auth, parentToken, err = r.refreshParentToken(ctx, client, account, auth, parentToken)
+	renewed, err := r.renewParent(ctx, accountID, sess.token)
 	if err != nil {
-		return lottery.CheckinEligibility{}, auth, parentToken, err
+		return lottery.CheckinStatus{}, lottery.StatusSettings{}, sess, err
 	}
-	eligibility, err = client.CheckinEligibility(ctx, parentToken, auth.UserID)
-	return eligibility, auth, parentToken, err
-}
-
-func (r *Runner) fetchCheckinDisplayStatus(ctx context.Context, client WebsiteClient, account config.Account, auth state.AuthState, parentToken string) (lottery.CheckinStatus, lottery.StatusSettings, state.AuthState, string, error) {
-	status, settings, err := fetchCheckinDisplayStatus(ctx, client, parentToken)
-	if err == nil {
-		return status, settings, auth, parentToken, nil
+	retryClient, clientErr := r.clientFor(renewed)
+	if clientErr != nil {
+		return lottery.CheckinStatus{}, lottery.StatusSettings{}, renewed, clientErr
 	}
-	if !subscriptionAuthError(err) {
-		return lottery.CheckinStatus{}, lottery.StatusSettings{}, auth, parentToken, err
-	}
-	auth, parentToken, err = r.refreshParentToken(ctx, client, account, auth, parentToken)
-	if err != nil {
-		return lottery.CheckinStatus{}, lottery.StatusSettings{}, auth, parentToken, err
-	}
-	status, settings, err = fetchCheckinDisplayStatus(ctx, client, parentToken)
-	return status, settings, auth, parentToken, err
+	status, settings, err = fetchCheckinDisplayStatus(ctx, retryClient, renewed.token)
+	return status, settings, renewed, err
 }
 
 func fetchCheckinDisplayStatus(ctx context.Context, client WebsiteClient, parentToken string) (lottery.CheckinStatus, lottery.StatusSettings, error) {
@@ -544,70 +555,6 @@ func fetchCheckinDisplayStatus(ctx context.Context, client WebsiteClient, parent
 	return status, settings, nil
 }
 
-func (r *Runner) ensureLotteryToken(ctx context.Context, client WebsiteClient, account config.Account, auth state.AuthState) (state.AuthState, string, error) {
-	if usableToken(auth.LotteryAccessToken, auth.LotteryAccessExpiresAt, r.now()) {
-		return auth, auth.LotteryAccessToken, nil
-	}
-	auth, parentToken, err := r.ensureParentToken(ctx, client, account, auth)
-	if err != nil {
-		return state.AuthState{}, "", err
-	}
-	if auth.UserID <= 0 {
-		return state.AuthState{}, "", errors.New("saved session did not contain a user ID")
-	}
-	bridge, err := client.Bridge(ctx, parentToken, auth.UserID)
-	if err == nil {
-		auth.LotteryAccessToken = bridge.AccessToken
-		auth.LotteryAccessExpiresAt = bridge.ExpiresAt
-		auth.Cookies = client.Cookies()
-		if err := r.store.PutAuth(account.ID, auth); err != nil {
-			return state.AuthState{}, "", err
-		}
-		return auth, bridge.AccessToken, nil
-	}
-	if !subscriptionAuthError(err) {
-		return state.AuthState{}, "", fmt.Errorf("refresh lottery session: %w", err)
-	}
-
-	// The parent token may have been accepted by /self but rejected by the
-	// bridge endpoint. Drop it and let ensureParentToken try the refresh cookie
-	// before considering a new password login.
-	auth, parentToken, err = r.refreshParentToken(ctx, client, account, auth, parentToken)
-	if err != nil {
-		return state.AuthState{}, "", err
-	}
-	if auth.UserID <= 0 {
-		return state.AuthState{}, "", errors.New("refreshed session did not contain a user ID")
-	}
-	bridge, err = client.Bridge(ctx, parentToken, auth.UserID)
-	if err != nil {
-		return state.AuthState{}, "", fmt.Errorf("bridge lottery session: %w", err)
-	}
-	auth.LotteryAccessToken = bridge.AccessToken
-	auth.LotteryAccessExpiresAt = bridge.ExpiresAt
-	auth.Cookies = client.Cookies()
-	if err := r.store.PutAuth(account.ID, auth); err != nil {
-		return state.AuthState{}, "", err
-	}
-	return auth, bridge.AccessToken, nil
-}
-
-func (r *Runner) persistParentSession(accountID string, client WebsiteClient, auth state.AuthState, session lottery.LoginResult) (state.AuthState, string, error) {
-	if session.UserID <= 0 || strings.TrimSpace(session.AccessToken) == "" {
-		return state.AuthState{}, "", errors.New("session response did not contain an access token and user ID")
-	}
-	auth.UserID = session.UserID
-	auth.ParentAccessToken = session.AccessToken
-	auth.ParentAccessExpiresAt = session.AccessExpiresAt
-	auth.LotteryAccessToken = ""
-	auth.LotteryAccessExpiresAt = time.Time{}
-	auth.Cookies = client.Cookies()
-	if err := r.store.PutAuth(accountID, auth); err != nil {
-		return state.AuthState{}, "", err
-	}
-	return auth, session.AccessToken, nil
-}
-
 func (r *Runner) today() string {
 	return r.now().In(shanghaiLocation).Format("2006-01-02")
 }
@@ -618,13 +565,6 @@ func (r *Runner) account(id string) (config.Account, error) {
 		return config.Account{}, fmt.Errorf("unknown account %q", id)
 	}
 	return account, nil
-}
-
-func usableToken(token string, expiresAt time.Time, now time.Time) bool {
-	if strings.TrimSpace(token) == "" {
-		return false
-	}
-	return expiresAt.IsZero() || expiresAt.After(now.Add(time.Minute))
 }
 
 func isUnknown(err error) bool {

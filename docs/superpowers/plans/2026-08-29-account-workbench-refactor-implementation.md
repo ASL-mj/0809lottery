@@ -271,7 +271,7 @@ Expected: pass.
 - Modify: `internal/service/runner_test.go`
 - Modify: `internal/state/store.go`
 
-- [ ] **Step 1: Write the auth state-machine tests**
+- [x] **Step 1: Write the auth state-machine tests**
 
 Create these exact cases with fake Vault and platform client:
 
@@ -283,7 +283,7 @@ func TestAcquireSerializesConcurrentRefreshes(t *testing.T) {}
 func TestRenewAfterLotteryUnauthorizedRetriesOnce(t *testing.T) {}
 ```
 
-- [ ] **Step 2: Verify the tests fail before implementation**
+- [x] **Step 2: Verify the tests fail before implementation**
 
 Run:
 
@@ -293,7 +293,7 @@ go test ./internal/auth -count=1
 
 Expected: fail because Broker does not exist.
 
-- [ ] **Step 3: Decouple platform login from `config.Account`**
+- [x] **Step 3: Decouple platform login from `config.Account`**
 
 Replace `Login(ctx, config.Account)` in `internal/lottery/client.go` with:
 
@@ -306,15 +306,15 @@ type Credentials struct {
 
 Keep existing HTTP request creation, response decoding and cookie tracking. Test with synthetic credentials only.
 
-- [ ] **Step 4: Implement SessionBroker**
+- [x] **Step 4: Implement SessionBroker**
 
 Define `ReadOnly`, `SideEffect`, `ScheduledAutomation`, and `ExplicitReauthenticate` intents. Inside `state.Store.LockAuth(accountID)`, reload Vault state; reuse a valid token, otherwise call `UserSelf`, then refresh once. Only `ExplicitReauthenticate` may call `Login`. Map timeout, 5xx, 429 and parse failures to `AuthUnavailable`; map explicit refresh rejection to `AuthReauthRequired`.
 
-- [ ] **Step 5: Refactor Runner through Broker**
+- [x] **Step 5: Refactor Runner through Broker**
 
 Remove direct `state.Auth` reads and `ensureParentTokenAfter`/`ensureLotteryToken` login branches. Runner requests a parent or lottery session from Broker, and calls a Broker renewal method once after upstream `401/403`. Keep existing action locks, idempotency keys and purchase reconciliation unchanged.
 
-- [ ] **Step 6: Verify auth and service regressions**
+- [x] **Step 6: Verify auth and service regressions**
 
 Run:
 
