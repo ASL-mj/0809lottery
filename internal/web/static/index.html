@@ -204,6 +204,7 @@
     <form>
       <h3>远端会话清理</h3>
       <div id="preview-dialog-body"></div>
+      <p class="dialog-error" id="preview-dialog-error"></p>
       <div class="account-dialog__row"><button type="button" class="action" id="preview-dialog-close">关闭</button></div>
     </form>
   </dialog>
@@ -1020,7 +1021,7 @@
         const badge = item.current ? '当前会话' : item.workbench_owned ? (item.verdict === 'candidate' ? '可清理' : '工作台保留') : '其他设备';
         return `<li><span class="sess-sid">${escapeHTML(String(item.sid || '').slice(0, 8))}…</span><span class="sess-badge${item.verdict === 'candidate' ? ' sess-badge--danger' : ''}">${escapeHTML(badge)}</span><span>${escapeHTML(item.last_active_at ? formatTime(item.last_active_at) : '')}</span></li>`;
       }).join('');
-      return `<div class="preview-state">平台共 ${toNumber(preview.total_known)} 个会话，工作台可安全清理 ${toNumber(preview.candidate_count)} 个。当前会话、其他设备会话与保留会话永远不会被清理。</div><ul class="preview-sessions">${rows}</ul><p class="dialog-error" id="preview-dialog-error"></p><div class="account-dialog__row"><button class="action action--danger" type="button" data-session-cleanup ${toNumber(preview.candidate_count) ? '' : 'disabled'}>清理可释放会话</button></div>`;
+      return `<div class="preview-state">平台共 ${toNumber(preview.total_known)} 个会话，工作台可安全清理 ${toNumber(preview.candidate_count)} 个。当前会话、其他设备会话与保留会话永远不会被清理。</div><ul class="preview-sessions">${rows}</ul><div class="account-dialog__row"><button class="action action--danger" type="button" data-session-cleanup ${toNumber(preview.candidate_count) ? '' : 'disabled'}>清理可释放会话</button></div>`;
     }
     function openDialog(dialog) { if (typeof dialog.showModal === 'function') dialog.showModal(); else dialog.setAttribute('open', ''); }
     function closeDialog(dialog) { dialog.close ? dialog.close() : dialog.removeAttribute('open'); }

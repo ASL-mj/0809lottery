@@ -1350,6 +1350,12 @@ func TestIndexExposesAccountManagementControls(t *testing.T) {
 	if !bytes.Contains(indexHTML, []byte("loadAccounts().catch(")) {
 		t.Fatal("initial account load must keep its error handler")
 	}
+	// Dialog error nodes must be static: the open handler clears them before
+	// the body renders, so a node emitted only inside render output would be
+	// null and break the dialog before it opens.
+	if got := bytes.Count(indexHTML, []byte("id=\"preview-dialog-error\"")); got != 1 {
+		t.Fatalf("preview-dialog-error must exist exactly once in the static markup, got %d", got)
+	}
 	if bytes.Contains(indexHTML, []byte("account.username")) {
 		t.Fatal("index must not render raw usernames")
 	}
