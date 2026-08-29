@@ -119,9 +119,13 @@
     .preview-state { color:var(--muted); font-size:13px; margin-bottom:8px; }
     .preview-dialog ul { margin:0; padding-left:18px; color:var(--ink); font-size:13px; }
     .preview-sessions { list-style:none; margin:0 0 12px; padding:0; display:grid; gap:6px; }
-    .preview-sessions li { display:flex; align-items:center; gap:10px; font-size:12px; color:var(--muted); }
-    .sess-sid { font-variant-numeric:tabular-nums; color:var(--ink); }
+    .preview-sessions li { font-size:12px; color:var(--muted); padding:9px 0; border-bottom:1px solid #ebebe8; }
+    .preview-sessions li:last-child { border-bottom:0; }
+    .sess-row__head { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+    .sess-device { color:var(--ink); font-weight:600; overflow-wrap:anywhere; }
+    .sess-row__meta { margin-top:3px; display:flex; flex-wrap:wrap; gap:4px 12px; font-size:11px; overflow-wrap:anywhere; word-break:break-all; }
     .sess-badge { display:inline-flex; padding:1px 8px; border:1px solid var(--line); border-radius:999px; background:var(--soft); font-size:11px; }
+    .sess-badge--current { border-color:var(--ok-line); background:var(--ok-bg); color:var(--ok); }
     .sess-badge--danger { border-color:#d7b0b0; background:#fdf3f3; color:var(--error); }
     .account__user { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
     .runtime-panel { border:1px solid var(--line-strong); border-radius:7px; background:var(--paper); box-shadow:0 1px 0 rgba(0,0,0,.02); overflow:hidden; }
@@ -253,7 +257,8 @@
     const formatTime = (value) => {
       if (!value) return '';
       const date = new Date(value);
-      return Number.isNaN(date.getTime()) ? String(value) : new Intl.DateTimeFormat('zh-CN', { dateStyle:'medium', timeStyle:'short', hour12:false, timeZone:'Asia/Shanghai' }).format(date);
+      if (Number.isNaN(date.getTime()) || date.getUTCFullYear() < 2000) return '';
+      return new Intl.DateTimeFormat('zh-CN', { dateStyle:'medium', timeStyle:'short', hour12:false, timeZone:'Asia/Shanghai' }).format(date);
     };
     const formatClock = (value) => {
       if (!value) return '';
@@ -1019,7 +1024,9 @@
       }
       const rows = (preview.sessions || []).map((item) => {
         const badge = item.current ? '当前会话' : item.workbench_owned ? (item.verdict === 'candidate' ? '可清理' : '工作台保留') : '其他设备';
-        return `<li><span class="sess-sid">${escapeHTML(String(item.sid || '').slice(0, 8))}…</span><span class="sess-badge${item.verdict === 'candidate' ? ' sess-badge--danger' : ''}">${escapeHTML(badge)}</span><span>${escapeHTML(item.last_active_at ? formatTime(item.last_active_at) : '')}</span></li>`;
+        const line1 = [escapeHTML(item.device || '未知设备'), item.ip ? escapeHTML(item.ip) : '', item.login_method ? escapeHTML(item.login_method) : ''].filter(Boolean).join(' · ');
+        const line2 = [`SID ${escapeHTML(item.sid || '')}`, item.created_at ? `登录于 ${formatTime(item.created_at)}` : '', item.last_active_at ? `活跃 ${formatTime(item.last_active_at)}` : '', item.expires_at ? `过期 ${formatTime(item.expires_at)}` : ''].filter(Boolean).join(' · ');
+        return `<li class="sess-row"><div class="sess-row__head"><span class="sess-badge${item.verdict === 'candidate' ? ' sess-badge--danger' : ''}${item.current ? ' sess-badge--current' : ''}">${escapeHTML(badge)}</span><span class="sess-device">${line1}</span></div><div class="sess-row__meta">${line2}</div></li>`;
       }).join('');
       return `<div class="preview-state">平台共 ${toNumber(preview.total_known)} 个会话，工作台可安全清理 ${toNumber(preview.candidate_count)} 个。当前会话、其他设备会话与保留会话永远不会被清理。</div><ul class="preview-sessions">${rows}</ul><div class="account-dialog__row"><button class="action action--danger" type="button" data-session-cleanup ${toNumber(preview.candidate_count) ? '' : 'disabled'}>清理可释放会话</button></div>`;
     }

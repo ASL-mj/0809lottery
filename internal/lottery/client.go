@@ -259,6 +259,8 @@ type SessionInfo struct {
 	SID         string
 	Current     bool
 	LoginMethod string
+	IP          string
+	UserAgent   string
 	CreatedAt   time.Time
 	LastActive  time.Time
 	ExpiresAt   time.Time
@@ -281,6 +283,8 @@ func (c *Client) Sessions(ctx context.Context, parentAccessToken string) ([]Sess
 			SID          string `json:"sid"`
 			Current      bool   `json:"current"`
 			LoginMethod  string `json:"login_method"`
+			IP           string `json:"ip"`
+			UserAgent    string `json:"user_agent"`
 			CreatedAt    int64  `json:"created_at"`
 			LastActiveAt int64  `json:"last_active_at"`
 			ExpiresAt    int64  `json:"expires_at"`
@@ -301,9 +305,11 @@ func (c *Client) Sessions(ctx context.Context, parentAccessToken string) ([]Sess
 			SID:         strings.TrimSpace(item.SID),
 			Current:     item.Current,
 			LoginMethod: item.LoginMethod,
-			CreatedAt:   time.Unix(item.CreatedAt, 0).UTC(),
-			LastActive:  time.Unix(item.LastActiveAt, 0).UTC(),
-			ExpiresAt:   time.Unix(item.ExpiresAt, 0).UTC(),
+			IP:          strings.TrimSpace(item.IP),
+			UserAgent:   strings.TrimSpace(item.UserAgent),
+			CreatedAt:   unixOrZero(item.CreatedAt),
+			LastActive:  unixOrZero(item.LastActiveAt),
+			ExpiresAt:   unixOrZero(item.ExpiresAt),
 		})
 	}
 	return sessions, nil
@@ -348,6 +354,83 @@ func (c *Client) RevokeSession(ctx context.Context, parentAccessToken, sid strin
 		return &APIError{StatusCode: response.StatusCode, Message: safeMessage("")}
 	}
 	return nil
+}
+
+func unixOrZero(seconds int64) time.Time {
+	if seconds <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(seconds, 0).UTC()
+}
+
+// DescribeUserAgent condenses a raw user-agent string into a readable
+// device summary such as "Chrome 151 · macOS". The raw string never leaves
+// the server; only this summary is exposed to the page.
+func DescribeUserAgent(ua string) string {
+	ua = strings.TrimSpace(ua)
+	if ua == "" {
+		return "未知设备"
+	}
+	type rule struct{ marker, name string }
+	browsers := []rule{
+		{"Edg/", "Edge"},
+		{"CriOS/", "Chrome iOS"},
+		{"Chrome/", "Chrome"},
+		{"Firefox/", "Firefox"},
+	}
+	systems := []rule{
+		{"iPhone", "iOS"},
+		{"iPad", "iPadOS"},
+		{"Android", "Android"},
+		{"Macintosh", "macOS"},
+		{"Windows", "Windows"},
+		{"Linux", "Linux"},
+	}
+	browser, version := "", ""
+	for _, item := range browsers {
+		if index := strings.Index(ua, item.marker); index >= 0 {
+			browser = item.name
+			version = browserVersion(ua[index+len(item.marker):])
+			break
+		}
+	}
+	if browser == "" && strings.Contains(ua, "Safari") {
+		browser = "Safari"
+	}
+	os := ""
+	for _, item := range systems {
+		if strings.Contains(ua, item.marker) {
+			os = item.name
+			break
+		}
+	}
+	switch {
+	case browser != "" && os != "":
+		if version != "" {
+			return browser + " " + version + " · " + os
+		}
+		return browser + " · " + os
+	case browser != "":
+		return browser
+	case os != "":
+		return os
+	default:
+		return "未知设备"
+	}
+}
+
+// browserVersion returns the major version: the digits before the first dot.
+func browserVersion(rest string) string {
+	end := strings.IndexByte(rest, '.')
+	if end < 0 {
+		end = len(rest)
+	}
+	for index := 0; index < end; index++ {
+		if rest[index] < '0' || rest[index] > '9' {
+			return rest[:index]
+		}
+	}
+	return rest[:end]
 }
 
 // SessionIDFromAccessToken extracts the platform session ID (`sid` claim)

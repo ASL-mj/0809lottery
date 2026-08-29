@@ -247,14 +247,20 @@ func (g *CapacityGuard) BeforeLogin(ctx context.Context, accountID string) error
 
 
 // SessionPreviewItem is one live platform session with the workbench's
-// keep/candidate verdict. Sensitive device fingerprints (user agent, IP) are
-// deliberately not exposed.
+// keep/candidate verdict. These are the account owner's own sessions; the
+// raw user-agent string stays server-side and only a parsed device summary
+// is exposed alongside the login method and IP.
 type SessionPreviewItem struct {
 	SID            string    `json:"sid"`
 	Current        bool      `json:"current"`
 	WorkbenchOwned bool      `json:"workbench_owned"`
-	LastActiveAt   time.Time `json:"last_active_at"`
 	Verdict        string    `json:"verdict"`
+	LoginMethod    string    `json:"login_method,omitempty"`
+	IP             string    `json:"ip,omitempty"`
+	Device         string    `json:"device,omitempty"`
+	CreatedAt      time.Time `json:"created_at,omitempty"`
+	LastActiveAt   time.Time `json:"last_active_at"`
+	ExpiresAt      time.Time `json:"expires_at,omitempty"`
 }
 
 // CleanupResult reports which workbench sessions were revoked.
@@ -346,7 +352,12 @@ func (m *PlatformSessionManager) classify(bundle secret.Bundle, sessions []lotte
 			SID:            session.SID,
 			Current:        isCurrent,
 			WorkbenchOwned: owned,
+			LoginMethod:    session.LoginMethod,
+			IP:             session.IP,
+			Device:         lottery.DescribeUserAgent(session.UserAgent),
+			CreatedAt:      session.CreatedAt,
 			LastActiveAt:   session.LastActive,
+			ExpiresAt:      session.ExpiresAt,
 		})
 	}
 	sort.Slice(candidatePool, func(left, right int) bool {

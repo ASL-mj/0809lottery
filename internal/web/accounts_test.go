@@ -187,7 +187,7 @@ func TestSessionPreviewAndCleanupEndpoints(t *testing.T) {
 			http.NotFound(writer, request)
 			return
 		}
-		_, _ = writer.Write([]byte(`{"success":true,"data":[{"sid":"sid-current","current":true,"last_active_at":1787954325},{"sid":"sid-phone","current":false,"last_active_at":1787954300}]}`))
+		_, _ = writer.Write([]byte(`{"success":true,"data":[{"sid":"sid-current","current":true,"login_method":"password","ip":"111.32.43.207","user_agent":"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36","last_active_at":1787954325},{"sid":"sid-phone","current":false,"ip":"111.32.43.208","user_agent":"Mozilla/5.0 (iPhone; CPU iPhone OS 26_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/151.0.7922.112 Mobile/15E148 Safari/604.1","last_active_at":1787954300}]}`))
 	}))
 	defer upstream.Close()
 
@@ -213,13 +213,17 @@ func TestSessionPreviewAndCleanupEndpoints(t *testing.T) {
 		t.Fatalf("preview status = %d: %s", preview.Code, preview.Body.String())
 	}
 	body := preview.Body.String()
-	for _, required := range []string{`"capability":"revocable"`, `"sid":"sid-current"`, `"current":true`, `"workbench_owned":false`, `"candidate_count":0`} {
+	for _, required := range []string{
+		`"capability":"revocable"`, `"sid":"sid-current"`, `"current":true`, `"workbench_owned":false`, `"candidate_count":0`,
+		// The owner sees parsed device details for their own sessions.
+		`"ip":"111.32.43.207"`, `"device":"Chrome 151 · macOS"`, `"device":"Chrome iOS 151 · iOS"`, `"login_method":"password"`,
+	} {
 		if !strings.Contains(body, required) {
 			t.Fatalf("preview missing %q: %s", required, body)
 		}
 	}
-	// Device fingerprints must not be exposed.
-	for _, forbidden := range []string{"user_agent", "Mozilla", "111.32"} {
+	// The raw user-agent string must never leave the server.
+	for _, forbidden := range []string{"user_agent", "Mozilla/5.0"} {
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("preview exposed %q", forbidden)
 		}

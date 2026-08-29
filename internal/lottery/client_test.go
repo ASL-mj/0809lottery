@@ -600,7 +600,7 @@ func TestSessionsAndRevokeSession(t *testing.T) {
 			if request.Header.Get("Authorization") != "Bearer parent-token" {
 				t.Fatalf("sessions authorization = %q", request.Header.Get("Authorization"))
 			}
-			_, _ = writer.Write([]byte(`{"success":true,"data":[{"sid":"71f11630","current":true,"login_method":"password","created_at":1787954192,"last_active_at":1787954325,"expires_at":1790546192},{"sid":"5bbd5956","current":false}]}`))
+			_, _ = writer.Write([]byte(`{"success":true,"data":[{"sid":"71f11630","current":true,"login_method":"password","ip":"111.32.43.207","user_agent":"Mozilla/5.0 (Macintosh) Chrome/151.0.0.0 Safari/537.36","created_at":1787954192,"last_active_at":1787954325,"expires_at":1790546192},{"sid":"5bbd5956","current":false}]}`))
 		case request.URL.Path == "/api/user/sessions/5bbd5956" && request.Method == http.MethodDelete:
 			revokePath = request.URL.Path
 			revokeToken = request.Header.Get("Authorization")
@@ -622,6 +622,9 @@ func TestSessionsAndRevokeSession(t *testing.T) {
 	if sessions[0].SID != "71f11630" || !sessions[0].Current || sessions[0].LastActive.IsZero() {
 		t.Fatalf("session decode = %#v", sessions[0])
 	}
+	if sessions[0].IP != "111.32.43.207" || DescribeUserAgent(sessions[0].UserAgent) != "Chrome 151 · macOS" {
+		t.Fatalf("device details = %#v", sessions[0])
+	}
 	if err := client.RevokeSession(context.Background(), "parent-token", "5bbd5956"); err != nil {
 		t.Fatalf("RevokeSession() error = %v", err)
 	}
@@ -639,6 +642,23 @@ func TestSessionIDFromAccessToken(t *testing.T) {
 	for _, broken := range []string{"", "not-a-jwt", "a.b.c", "header." + base64.RawURLEncoding.EncodeToString([]byte(`{"no_sid":1}`)) + ".sig"} {
 		if got := SessionIDFromAccessToken(broken); got != "" {
 			t.Fatalf("SessionIDFromAccessToken(%q) = %q, want empty", broken, got)
+		}
+	}
+}
+
+
+func TestDescribeUserAgent(t *testing.T) {
+	cases := []struct{ ua, want string }{
+		{"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36", "Chrome 151 · macOS"},
+		{"Mozilla/5.0 (iPhone; CPU iPhone OS 26_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/151.0.7922.112 Mobile/15E148 Safari/604.1", "Chrome iOS 151 · iOS"},
+		{"Mozilla/5.0 (Windows NT 10.0; Win64; x64) Firefox/130.0", "Firefox 130 · Windows"},
+		{"Mozilla/5.0 (Windows NT 10.0) AppleWebKit/605.1.15 Safari/605.1.15", "Safari · Windows"},
+		{"", "未知设备"},
+		{"some-unparsable-agent", "未知设备"},
+	}
+	for _, tc := range cases {
+		if got := DescribeUserAgent(tc.ua); got != tc.want {
+			t.Fatalf("DescribeUserAgent(%q) = %q, want %q", tc.ua, got, tc.want)
 		}
 	}
 }
