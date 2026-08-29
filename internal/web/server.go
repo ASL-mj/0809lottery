@@ -228,7 +228,7 @@ func (s *Server) sharedGuard() (*auth.CapacityGuard, error) {
 	if err != nil {
 		return nil, err
 	}
-	manager := auth.NewPlatformSessionManager(vault, s.platformClientFactory(), s.cfg.DurableSessionLimit, s.cfg.UserAgent)
+	manager := auth.NewPlatformSessionManager(vault, s.platformClientFactory(), s.cfg.DurableSessionLimit)
 	s.guard = auth.NewCapacityGuard(manager, s.cfg.SessionLimit, s.cfg.SessionSafetyMargin)
 	s.broker.SetCapacityGuard(s.guard.BeforeLogin)
 	return s.guard, nil

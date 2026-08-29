@@ -289,14 +289,15 @@ type PlatformSessionManager struct {
 	vault        secret.Vault
 	newClient    ClientFactory
 	durableLimit int
-	workbenchUA  string
 	now          func() time.Time
 }
 
-// NewPlatformSessionManager builds the live manager. workbenchUA is the
-// User-Agent the workbench's own client sends; sessions logged in from the
-// platform UI or other devices carry browser UAs instead.
-func NewPlatformSessionManager(vault secret.Vault, factory ClientFactory, durableLimit int, workbenchUA string) *PlatformSessionManager {
+// NewPlatformSessionManager builds the live manager. The workbench session
+// label comes exclusively from the vault ledger, never from user-agent
+// matching: once the workbench logs in with a browser-like UA its sessions
+// are indistinguishable from real browser sessions to everyone but the
+// ledger.
+func NewPlatformSessionManager(vault secret.Vault, factory ClientFactory, durableLimit int) *PlatformSessionManager {
 	if durableLimit <= 0 {
 		durableLimit = 1
 	}
@@ -304,7 +305,6 @@ func NewPlatformSessionManager(vault secret.Vault, factory ClientFactory, durabl
 		vault:        vault,
 		newClient:    factory,
 		durableLimit: durableLimit,
-		workbenchUA:  strings.TrimSpace(workbenchUA),
 		now:          time.Now,
 	}
 }
@@ -354,8 +354,8 @@ func (m *PlatformSessionManager) classify(bundle secret.Bundle, sessions []lotte
 		isCurrent := session.Current || (currentSID != "" && session.SID == currentSID)
 		live = append(live, session)
 		device := lottery.DescribeUserAgent(session.UserAgent)
-		if m.workbenchUA != "" && strings.Contains(session.UserAgent, m.workbenchUA) {
-			device = "工作台"
+		if owned {
+			device = "工作台 · " + device
 		}
 		items = append(items, SessionPreviewItem{
 			SID:            session.SID,

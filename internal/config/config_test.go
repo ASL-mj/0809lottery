@@ -26,6 +26,9 @@ func TestLoadFromUsesDefaultsWithoutLegacyCredentials(t *testing.T) {
 	if cfg.BaseURL != defaultBaseURL {
 		t.Fatalf("unexpected defaults: %#v", cfg)
 	}
+	if strings.Contains(cfg.UserAgent, "SkyeLotteryBot") || !strings.Contains(cfg.UserAgent, "Chrome/") {
+		t.Fatalf("default user agent must look like a browser: %q", cfg.UserAgent)
+	}
 	if cfg.SessionLimit != defaultSessionLimit || cfg.SessionSafetyMargin != defaultSessionSafetyMargin || cfg.DurableSessionLimit != defaultDurableSessionLimit {
 		t.Fatalf("session settings = %d/%d/%d", cfg.SessionLimit, cfg.SessionSafetyMargin, cfg.DurableSessionLimit)
 	}

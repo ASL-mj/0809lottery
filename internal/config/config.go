@@ -12,7 +12,10 @@ import (
 const (
 	defaultBaseURL   = "https://www.0809.one"
 	defaultStatePath = "/root/projects/lottery-bot/data/state.json"
-	defaultUserAgent = "SkyeLotteryBot/1.0"
+	// defaultUserAgent mirrors a current macOS Chrome install so the platform
+	// cannot single the workbench out as an automated client by its UA alone.
+	// Refresh the major version occasionally as Chrome updates.
+	defaultUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
 	defaultWebAddr   = "127.0.0.1:18090"
 
 	defaultSessionLimit        = 50

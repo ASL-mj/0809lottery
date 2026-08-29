@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -194,10 +195,21 @@ func TestPlatformSessionManagerPreviewClassifiesSessions(t *testing.T) {
 		{SID: "sid-user-phone", LastActive: brokerTestNow.Add(-30 * time.Minute)},
 	}
 
-	harness.platform.sessionsResult[0].UserAgent = "SkyeLotteryBot/1.0"
+	// The current session is ledger-owned and logs in with the browser-like UA.
+	harness.platform.sessionsResult[0].UserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
+	current, loadErr := harness.vault.Load(context.Background(), "account-a")
+	if loadErr != nil {
+		t.Fatalf("vault load: %v", loadErr)
+	}
+	current.ManagedSessions = append(current.ManagedSessions, secret.ManagedSession{
+		RemoteID: "sid-current", Origin: secret.SessionOriginWorkbench, LastSeenAt: brokerTestNow,
+	})
+	if err := harness.vault.Save(context.Background(), "account-a", current); err != nil {
+		t.Fatalf("vault save: %v", err)
+	}
 	manager := NewPlatformSessionManager(harness.vault, func([]state.Cookie) (PlatformClient, error) {
 		return harness.platform, nil
-	}, 1, "SkyeLotteryBot/1.0")
+	}, 1)
 	preview, err := manager.Preview(context.Background(), "account-a")
 	if err != nil {
 		t.Fatalf("Preview() error = %v", err)
@@ -221,8 +233,8 @@ func TestPlatformSessionManagerPreviewClassifiesSessions(t *testing.T) {
 		if item.SID == "sid-pinned" && item.Verdict == "candidate" {
 			t.Fatalf("pinned session became a candidate: %#v", item)
 		}
-		if item.SID == "sid-current" && item.Device != "工作台" {
-			t.Fatalf("workbench session device = %q, want 工作台", item.Device)
+		if item.SID == "sid-current" && !strings.HasPrefix(item.Device, "工作台 · ") {
+			t.Fatalf("ledger-owned session device = %q, want 工作台 prefix", item.Device)
 		}
 	}
 }
@@ -246,7 +258,7 @@ func TestPlatformSessionManagerCleanupRevokesOnlyOwned(t *testing.T) {
 	}
 	manager := NewPlatformSessionManager(harness.vault, func([]state.Cookie) (PlatformClient, error) {
 		return harness.platform, nil
-	}, 1, "SkyeLotteryBot/1.0")
+	}, 1)
 
 	result, err := manager.Cleanup(context.Background(), "account-a")
 	if err != nil {
