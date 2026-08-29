@@ -376,9 +376,9 @@ func (m *PlatformSessionManager) classify(bundle secret.Bundle, sessions []lotte
 			item.Verdict = "candidate"
 		}
 	}
-	for _, item := range items {
-		if item.Verdict == "" {
-			item.Verdict = "keep"
+	for index := range items {
+		if items[index].Verdict == "" {
+			items[index].Verdict = "keep"
 		}
 	}
 

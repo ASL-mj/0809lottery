@@ -208,6 +208,9 @@ func TestPlatformSessionManagerPreviewClassifiesSessions(t *testing.T) {
 		t.Fatalf("candidates = %#v, want only sid-old", preview.Candidates)
 	}
 	for _, item := range preview.Sessions {
+		if item.Verdict == "" {
+			t.Fatalf("session %s has an empty verdict: %#v", item.SID, item)
+		}
 		if item.SID == "sid-current" && (item.Verdict == "candidate" || !item.Current) {
 			t.Fatalf("current session misclassified: %#v", item)
 		}
