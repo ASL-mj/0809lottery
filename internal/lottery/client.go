@@ -3,6 +3,7 @@ package lottery
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -251,6 +252,124 @@ func (result DrawResult) Summary() state.DrawSummary {
 
 type OperationResult struct {
 	Status string `json:"status"`
+}
+
+// SessionInfo is one entry of the platform's online-session list.
+type SessionInfo struct {
+	SID         string
+	Current     bool
+	LoginMethod string
+	CreatedAt   time.Time
+	LastActive  time.Time
+	ExpiresAt   time.Time
+}
+
+// Sessions lists the account's online sessions (the platform's stable session
+// ID is `sid`; `current` marks the session the calling token belongs to).
+func (c *Client) Sessions(ctx context.Context, parentAccessToken string) ([]SessionInfo, error) {
+	if strings.TrimSpace(parentAccessToken) == "" {
+		return nil, errors.New("sessions requires a parent access token")
+	}
+	payload, err := c.getJSON(ctx, "/api/user/sessions", parentAccessToken, "/profile")
+	if err != nil {
+		return nil, fmt.Errorf("sessions request: %w", err)
+	}
+	var envelope struct {
+		Success *bool         `json:"success"`
+		Message string        `json:"message"`
+		Data    []struct {
+			SID          string `json:"sid"`
+			Current      bool   `json:"current"`
+			LoginMethod  string `json:"login_method"`
+			CreatedAt    int64  `json:"created_at"`
+			LastActiveAt int64  `json:"last_active_at"`
+			ExpiresAt    int64  `json:"expires_at"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		return nil, fmt.Errorf("decode sessions response: %w", err)
+	}
+	if envelope.Success != nil && !*envelope.Success {
+		return nil, &APIError{StatusCode: http.StatusOK, Message: safeMessage(envelope.Message)}
+	}
+	sessions := make([]SessionInfo, 0, len(envelope.Data))
+	for _, item := range envelope.Data {
+		if strings.TrimSpace(item.SID) == "" {
+			continue
+		}
+		sessions = append(sessions, SessionInfo{
+			SID:         strings.TrimSpace(item.SID),
+			Current:     item.Current,
+			LoginMethod: item.LoginMethod,
+			CreatedAt:   time.Unix(item.CreatedAt, 0).UTC(),
+			LastActive:  time.Unix(item.LastActiveAt, 0).UTC(),
+			ExpiresAt:   time.Unix(item.ExpiresAt, 0).UTC(),
+		})
+	}
+	return sessions, nil
+}
+
+// RevokeSession revokes exactly one session by its stable ID. The platform
+// echoes the revoked sid and whether it was the current session.
+func (c *Client) RevokeSession(ctx context.Context, parentAccessToken, sid string) error {
+	if strings.TrimSpace(parentAccessToken) == "" {
+		return errors.New("revoke session requires a parent access token")
+	}
+	if strings.TrimSpace(sid) == "" {
+		return errors.New("revoke session requires a session ID")
+	}
+	request, err := c.newRequest(ctx, http.MethodDelete, "/api/user/sessions/"+url.PathEscape(strings.TrimSpace(sid)), nil)
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Authorization", "Bearer "+strings.TrimSpace(parentAccessToken))
+	request.Header.Set("Origin", c.baseURL.String())
+	request.Header.Set("Referer", c.url("/profile").String())
+
+	response, err := c.http.Do(request)
+	if err != nil {
+		return fmt.Errorf("revoke session request: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return responseError(response)
+	}
+	var envelope struct {
+		Success *bool `json:"success"`
+		Data    struct {
+			Current    bool   `json:"current"`
+			RevokedSID string `json:"revoked_sid"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&envelope); err != nil {
+		return fmt.Errorf("decode revoke session response: %w", err)
+	}
+	if envelope.Success != nil && !*envelope.Success {
+		return &APIError{StatusCode: response.StatusCode, Message: safeMessage("")}
+	}
+	return nil
+}
+
+// SessionIDFromAccessToken extracts the platform session ID (`sid` claim)
+// from a parent access token. It only decodes the claim; the token itself is
+// never verified here. An empty result means the session cannot be tracked.
+func SessionIDFromAccessToken(token string) string {
+	token = strings.TrimSpace(token)
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return ""
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return ""
+	}
+	var claims struct {
+		SID string `json:"sid"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(claims.SID)
 }
 
 type Client struct {

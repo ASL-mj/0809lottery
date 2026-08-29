@@ -2,12 +2,15 @@ package auth
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
+	"net/http"
 	"testing"
 	"time"
 
 	"skyeapi/lottery-bot/internal/lottery"
 	"skyeapi/lottery-bot/internal/secret"
+	"skyeapi/lottery-bot/internal/state"
 )
 
 // Until the platform exposes a verified session-list contract the manager must
@@ -93,18 +96,20 @@ func TestCapacityGuardBlocksLoginWithoutFreeableSessions(t *testing.T) {
 	freeablePreview.CandidateCount = 1
 	freeablePreview.EstimatedFree = 1
 
-	guard := NewCapacityGuard(stubSessionManager{preview: fullPreview}, 50, 5)
+	guard := NewCapacityGuard(&stubSessionManager{preview: fullPreview}, 50, 5)
 	if err := guard.BeforeLogin(context.Background(), "account-a"); !errors.Is(err, ErrSessionCapacityProtected) {
 		t.Fatalf("BeforeLogin() error = %v, want ErrSessionCapacityProtected", err)
 	}
 
-	guard = NewCapacityGuard(stubSessionManager{preview: freeablePreview}, 50, 5)
+	guard = NewCapacityGuard(&stubSessionManager{preview: freeablePreview, afterCleanup: CleanupPreview{
+		Capability: SessionRevocable, TotalKnown: 44, TotalKnownSet: true,
+	}}, 50, 5)
 	if err := guard.BeforeLogin(context.Background(), "account-a"); err != nil {
 		t.Fatalf("BeforeLogin() with freeable candidates error = %v", err)
 	}
 
 	// Below the safety margin nothing blocks the login: threshold = 100-5 = 95.
-	guard = NewCapacityGuard(stubSessionManager{preview: fullPreview}, 100, 5)
+	guard = NewCapacityGuard(&stubSessionManager{preview: fullPreview}, 100, 5)
 	if err := guard.BeforeLogin(context.Background(), "account-a"); err != nil {
 		t.Fatalf("BeforeLogin() below threshold error = %v", err)
 	}
@@ -142,13 +147,145 @@ func TestExplicitLoginHonorsCapacityGuard(t *testing.T) {
 }
 
 type stubSessionManager struct {
-	preview CleanupPreview
+	preview      CleanupPreview
+	afterCleanup CleanupPreview
+	cleanups     int
 }
 
-func (s stubSessionManager) Capability() SessionCapability {
+func (s *stubSessionManager) Capability() SessionCapability {
 	return s.preview.Capability
 }
 
-func (s stubSessionManager) Preview(context.Context, string) (CleanupPreview, error) {
+func (s *stubSessionManager) Preview(context.Context, string) (CleanupPreview, error) {
 	return s.preview, nil
+}
+
+func (s *stubSessionManager) Cleanup(context.Context, string) (CleanupResult, error) {
+	s.cleanups++
+	if s.afterCleanup.Capability != "" {
+		s.preview = s.afterCleanup
+	}
+	return CleanupResult{Revoked: []string{"s-old"}}, nil
+}
+
+func testJWTWithSID(sid string) string {
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"sid":"` + sid + `","iss":"new-api"}`))
+	return "header." + payload + ".signature"
+}
+
+// The manager must only offer workbench-owned sessions as candidates; the
+// current session and unknown devices are always kept.
+func TestPlatformSessionManagerPreviewClassifiesSessions(t *testing.T) {
+	harness := newBrokerHarness(t, secret.Bundle{
+		UserID:                7,
+		ParentAccessToken:     testJWTWithSID("sid-current"),
+		ParentAccessExpiresAt: brokerTestNow.Add(2 * time.Hour),
+		ManagedSessions: []secret.ManagedSession{
+			{RemoteID: "sid-old", Origin: secret.SessionOriginWorkbench, LastSeenAt: brokerTestNow.Add(-8 * time.Hour)},
+			{RemoteID: "sid-recent", Origin: secret.SessionOriginWorkbench, LastSeenAt: brokerTestNow.Add(-time.Hour)},
+			{RemoteID: "sid-pinned", Origin: secret.SessionOriginWorkbench, Pinned: true, LastSeenAt: brokerTestNow.Add(-9 * time.Hour)},
+		},
+	})
+	harness.platform.sessionsResult = []lottery.SessionInfo{
+		{SID: "sid-current", Current: true, LastActive: brokerTestNow},
+		{SID: "sid-old", LastActive: brokerTestNow.Add(-8 * time.Hour)},
+		{SID: "sid-recent", LastActive: brokerTestNow.Add(-time.Hour)},
+		{SID: "sid-pinned", LastActive: brokerTestNow.Add(-9 * time.Hour)},
+		{SID: "sid-user-phone", LastActive: brokerTestNow.Add(-30 * time.Minute)},
+	}
+
+	manager := NewPlatformSessionManager(harness.vault, func([]state.Cookie) (PlatformClient, error) {
+		return harness.platform, nil
+	}, 1)
+	preview, err := manager.Preview(context.Background(), "account-a")
+	if err != nil {
+		t.Fatalf("Preview() error = %v", err)
+	}
+	if preview.Capability != SessionRevocable || preview.TotalKnown != 5 || !preview.TotalKnownSet {
+		t.Fatalf("preview header = %#v", preview)
+	}
+	if preview.CandidateCount != 1 || preview.Candidates[0].RemoteID != "sid-old" {
+		t.Fatalf("candidates = %#v, want only sid-old", preview.Candidates)
+	}
+	for _, item := range preview.Sessions {
+		if item.SID == "sid-current" && (item.Verdict == "candidate" || !item.Current) {
+			t.Fatalf("current session misclassified: %#v", item)
+		}
+		if item.SID == "sid-user-phone" && item.Verdict == "candidate" {
+			t.Fatalf("unknown device became a candidate: %#v", item)
+		}
+		if item.SID == "sid-pinned" && item.Verdict == "candidate" {
+			t.Fatalf("pinned session became a candidate: %#v", item)
+		}
+	}
+}
+
+// Cleanup revokes exactly the candidates and prunes the ledger.
+func TestPlatformSessionManagerCleanupRevokesOnlyOwned(t *testing.T) {
+	harness := newBrokerHarness(t, secret.Bundle{
+		UserID:                7,
+		ParentAccessToken:     testJWTWithSID("sid-current"),
+		ParentAccessExpiresAt: brokerTestNow.Add(2 * time.Hour),
+		ManagedSessions: []secret.ManagedSession{
+			{RemoteID: "sid-old", Origin: secret.SessionOriginWorkbench, LastSeenAt: brokerTestNow.Add(-8 * time.Hour)},
+			{RemoteID: "sid-recent", Origin: secret.SessionOriginWorkbench, LastSeenAt: brokerTestNow.Add(-time.Hour)},
+		},
+	})
+	harness.platform.sessionsResult = []lottery.SessionInfo{
+		{SID: "sid-current", Current: true, LastActive: brokerTestNow},
+		{SID: "sid-old", LastActive: brokerTestNow.Add(-8 * time.Hour)},
+		{SID: "sid-recent", LastActive: brokerTestNow.Add(-time.Hour)},
+		{SID: "sid-user-phone", LastActive: brokerTestNow.Add(-30 * time.Minute)},
+	}
+	manager := NewPlatformSessionManager(harness.vault, func([]state.Cookie) (PlatformClient, error) {
+		return harness.platform, nil
+	}, 1)
+
+	result, err := manager.Cleanup(context.Background(), "account-a")
+	if err != nil {
+		t.Fatalf("Cleanup() error = %v", err)
+	}
+	if len(result.Revoked) != 1 || result.Revoked[0] != "sid-old" {
+		t.Fatalf("Cleanup() revoked = %#v, want [sid-old]", result.Revoked)
+	}
+	if harness.platform.revokeCalls != 1 {
+		t.Fatalf("revoke calls = %d, want 1", harness.platform.revokeCalls)
+	}
+	bundle, err := harness.vault.Load(context.Background(), "account-a")
+	if err != nil {
+		t.Fatalf("vault load: %v", err)
+	}
+	for _, item := range bundle.ManagedSessions {
+		if item.RemoteID == "sid-old" {
+			t.Fatal("revoked session stayed in the ledger")
+		}
+	}
+}
+
+// An explicit login records the new platform session in the ledger.
+func TestBrokerRecordsManagedSessionAfterLogin(t *testing.T) {
+	harness := newBrokerHarness(t, secret.Bundle{LoginName: "a@example.test", Password: "test-password"})
+	harness.platform.refreshErrs = []error{&lottery.APIError{StatusCode: http.StatusForbidden}}
+	harness.platform.loginResult = lottery.LoginResult{
+		UserID:          9,
+		AccessToken:     testJWTWithSID("sid-new-login"),
+		AccessExpiresAt: brokerTestNow.Add(2 * time.Hour),
+	}
+
+	if _, err := harness.broker.Acquire(context.Background(), "account-a", ExplicitReauthenticate, SessionParent); err != nil {
+		t.Fatalf("Acquire() error = %v", err)
+	}
+	bundle, err := harness.vault.Load(context.Background(), "account-a")
+	if err != nil {
+		t.Fatalf("vault load: %v", err)
+	}
+	found := false
+	for _, item := range bundle.ManagedSessions {
+		if item.RemoteID == "sid-new-login" && item.Origin == secret.SessionOriginWorkbench {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("new session was not recorded: %#v", bundle.ManagedSessions)
+	}
 }

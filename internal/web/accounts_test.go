@@ -1,10 +1,12 @@
 package web
 
 import (
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"skyeapi/lottery-bot/internal/state"
 )
@@ -151,19 +153,17 @@ func TestReauthenticateRequiresExplicitConfirm(t *testing.T) {
 	}
 }
 
-func TestSessionPreviewReportsUnsupportedCapability(t *testing.T) {
+// With no reachable platform the preview fails safely and points at
+// reauthentication instead of faking a cleanup result.
+func TestSessionPreviewFailsSafelyWithoutPlatform(t *testing.T) {
 	server := testServer(t)
 	recorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(recorder, authenticatedRequest(http.MethodGet, "/api/accounts/account-a/session-preview", nil))
-	if recorder.Code != http.StatusOK {
+	if recorder.Code != http.StatusBadGateway {
 		t.Fatalf("session preview status = %d: %s", recorder.Code, recorder.Body.String())
 	}
-	body := recorder.Body.String()
-	if !strings.Contains(body, `"capability":"unsupported"`) || !strings.Contains(body, `"candidate_count":0`) {
-		t.Fatalf("session preview must report unsupported with zero candidates: %s", body)
-	}
-	if !strings.Contains(body, "不可用") {
-		t.Fatalf("session preview must explain that cleanup is unavailable: %s", body)
+	if !strings.Contains(recorder.Body.String(), "重新认证") {
+		t.Fatalf("preview failure must point at reauthentication: %s", recorder.Body.String())
 	}
 }
 
@@ -177,5 +177,66 @@ func TestAccountViewsNeverExposeRawLogins(t *testing.T) {
 	}
 	if !strings.Contains(body, `"masked_login_name":"a***@example.com"`) {
 		t.Fatalf("account list missing masked login name: %s", body)
+	}
+}
+
+func TestSessionPreviewAndCleanupEndpoints(t *testing.T) {
+	// A platform fake that answers the sessions listing.
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/api/user/sessions" {
+			http.NotFound(writer, request)
+			return
+		}
+		_, _ = writer.Write([]byte(`{"success":true,"data":[{"sid":"sid-current","current":true,"last_active_at":1787954325},{"sid":"sid-phone","current":false,"last_active_at":1787954300}]}`))
+	}))
+	defer upstream.Close()
+
+	server := testServer(t)
+	server.cfg.BaseURL = upstream.URL
+	store, err := state.Open(server.cfg.StatePath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"sid":"sid-current"}`))
+	if err := store.PutAuth("account-a", state.AuthState{
+		UserID:                1,
+		ParentAccessToken:     "header." + payload + ".signature",
+		ParentAccessExpiresAt: time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("PutAuth() error = %v", err)
+	}
+	_ = store.Close()
+
+	preview := httptest.NewRecorder()
+	server.Handler().ServeHTTP(preview, authenticatedRequest(http.MethodGet, "/api/accounts/account-a/session-preview", nil))
+	if preview.Code != http.StatusOK {
+		t.Fatalf("preview status = %d: %s", preview.Code, preview.Body.String())
+	}
+	body := preview.Body.String()
+	for _, required := range []string{`"capability":"revocable"`, `"sid":"sid-current"`, `"current":true`, `"workbench_owned":false`, `"candidate_count":0`} {
+		if !strings.Contains(body, required) {
+			t.Fatalf("preview missing %q: %s", required, body)
+		}
+	}
+	// Device fingerprints must not be exposed.
+	for _, forbidden := range []string{"user_agent", "Mozilla", "111.32"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("preview exposed %q", forbidden)
+		}
+	}
+
+	missing := httptest.NewRecorder()
+	server.Handler().ServeHTTP(missing, authenticatedJSONRequest(http.MethodPost, "/api/accounts/account-a/sessions/cleanup", `{}`))
+	if missing.Code != http.StatusBadRequest {
+		t.Fatalf("cleanup without confirm status = %d, want 400", missing.Code)
+	}
+
+	cleanup := httptest.NewRecorder()
+	server.Handler().ServeHTTP(cleanup, authenticatedJSONRequest(http.MethodPost, "/api/accounts/account-a/sessions/cleanup", `{"confirm":true}`))
+	if cleanup.Code != http.StatusOK {
+		t.Fatalf("cleanup status = %d: %s", cleanup.Code, cleanup.Body.String())
+	}
+	if !strings.Contains(cleanup.Body.String(), `"revoked":[]`) {
+		t.Fatalf("cleanup response = %s", cleanup.Body.String())
 	}
 }

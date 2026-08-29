@@ -118,6 +118,11 @@
     .account-dialog__row { display:flex; gap:8px; justify-content:flex-end; }
     .preview-state { color:var(--muted); font-size:13px; margin-bottom:8px; }
     .preview-dialog ul { margin:0; padding-left:18px; color:var(--ink); font-size:13px; }
+    .preview-sessions { list-style:none; margin:0 0 12px; padding:0; display:grid; gap:6px; }
+    .preview-sessions li { display:flex; align-items:center; gap:10px; font-size:12px; color:var(--muted); }
+    .sess-sid { font-variant-numeric:tabular-nums; color:var(--ink); }
+    .sess-badge { display:inline-flex; padding:1px 8px; border:1px solid var(--line); border-radius:999px; background:var(--soft); font-size:11px; }
+    .sess-badge--danger { border-color:#d7b0b0; background:#fdf3f3; color:var(--error); }
     .account__user { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
     .runtime-panel { border:1px solid var(--line-strong); border-radius:7px; background:var(--paper); box-shadow:0 1px 0 rgba(0,0,0,.02); overflow:hidden; }
     .runtime-panel__header { min-width:0; display:flex; align-items:flex-start; justify-content:space-between; gap:14px; padding:18px; border-bottom:1px solid var(--line); background:var(--soft); }
@@ -1007,11 +1012,15 @@
       if (!state.logsLoading) loadRuntimeLogs();
     });
     function renderSessionPreview(preview) {
-      if (!preview || preview.capability === 'unsupported') {
-        return `<div class="preview-state">远端会话清理不可用：平台会话查询与撤销接口尚未确认。工作台不会伪造清理结果，也不会因此自动登录。</div>`;
+      if (!preview) return '<div class="preview-state">会话预览不可用。</div>';
+      if (preview.capability === 'unsupported') {
+        return '<div class="preview-state">远端会话清理不可用：平台会话查询与撤销接口尚未确认。</div>';
       }
-      const rows = (preview.candidates || []).map((candidate) => `<li>会话 ${escapeHTML(candidate.remote_id)} · ${escapeHTML(candidate.reason || '')}</li>`).join('');
-      return `<div class="preview-state">可安全释放 ${preview.candidate_count} 个会话，保留 ${preview.keep_count} 个。</div><ul>${rows}</ul>`;
+      const rows = (preview.sessions || []).map((item) => {
+        const badge = item.current ? '当前会话' : item.workbench_owned ? (item.verdict === 'candidate' ? '可清理' : '工作台保留') : '其他设备';
+        return `<li><span class="sess-sid">${escapeHTML(String(item.sid || '').slice(0, 8))}…</span><span class="sess-badge${item.verdict === 'candidate' ? ' sess-badge--danger' : ''}">${escapeHTML(badge)}</span><span>${escapeHTML(item.last_active_at ? formatTime(item.last_active_at) : '')}</span></li>`;
+      }).join('');
+      return `<div class="preview-state">平台共 ${toNumber(preview.total_known)} 个会话，工作台可安全清理 ${toNumber(preview.candidate_count)} 个。当前会话、其他设备会话与保留会话永远不会被清理。</div><ul class="preview-sessions">${rows}</ul><p class="dialog-error" id="preview-dialog-error"></p><div class="account-dialog__row"><button class="action action--danger" type="button" data-session-cleanup ${toNumber(preview.candidate_count) ? '' : 'disabled'}>清理可释放会话</button></div>`;
     }
     function openDialog(dialog) { if (typeof dialog.showModal === 'function') dialog.showModal(); else dialog.setAttribute('open', ''); }
     function closeDialog(dialog) { dialog.close ? dialog.close() : dialog.removeAttribute('open'); }
@@ -1082,6 +1091,23 @@
     deleteDialog.addEventListener('submit', (event) => { event.preventDefault(); submitDelete(deleteDialog.dataset.accountId); });
     document.querySelector('#delete-dialog-cancel').addEventListener('click', () => closeDialog(deleteDialog));
     document.querySelector('#preview-dialog-close').addEventListener('click', () => closeDialog(previewDialog));
+    previewDialog.addEventListener('click', async (event) => {
+      const button = event.target.closest('[data-session-cleanup]');
+      if (!button) return;
+      const accountID = previewDialog.dataset.accountId;
+      const errorNode = document.querySelector('#preview-dialog-error');
+      errorNode.textContent = '';
+      button.disabled = true;
+      try {
+        const result = await request(`/api/accounts/${encodeURIComponent(accountID)}/sessions/cleanup`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirm: true }) });
+        errorNode.textContent = `已撤销 ${result.revoked.length} 个会话${result.failed.length ? `，失败 ${result.failed.length} 个` : ''}`;
+        const payload = await request(`/api/accounts/${encodeURIComponent(accountID)}/session-preview`);
+        document.querySelector('#preview-dialog-body').innerHTML = renderSessionPreview(payload.preview);
+      } catch (error) {
+        errorNode.textContent = error.message;
+        button.disabled = false;
+      }
+    });
     function handleManagementAction(button) {
       if (button.hasAttribute('data-add-account')) { openAccountDialog(null); return; }
       const accountID = button.dataset.editAccount || button.dataset.validateAuth || button.dataset.reauthenticate || button.dataset.sessionPreview || button.dataset.deleteAccount;
@@ -1090,7 +1116,7 @@
       if (button.dataset.editAccount) openAccountDialog(account);
       else if (button.dataset.validateAuth) request(`/api/accounts/${encodeURIComponent(accountID)}/validate`, { method: 'POST' }).then(async (result) => { account.auth_health = result.auth_health; render(); }).catch(async (error) => { setFooter(account, `认证检查失败：${error.message}`, 'error'); render(); });
       else if (button.dataset.reauthenticate) { reauthDialog.dataset.accountId = accountID; document.querySelector('#reauth-dialog-account').textContent = account?.label || accountID; document.querySelector('#reauth-dialog-error').textContent = ''; openDialog(reauthDialog); }
-      else if (button.dataset.sessionPreview) { request(`/api/accounts/${encodeURIComponent(accountID)}/session-preview`).then((payload) => { document.querySelector('#preview-dialog-body').innerHTML = renderSessionPreview(payload.preview); openDialog(previewDialog); }).catch((error) => { setFooter(account, `会话预览失败：${error.message}`, 'error'); render(); }); }
+      else if (button.dataset.sessionPreview) { previewDialog.dataset.accountId = accountID; document.querySelector('#preview-dialog-body').innerHTML = '<div class="preview-state">正在读取会话列表...</div>'; document.querySelector('#preview-dialog-error').textContent = ''; openDialog(previewDialog); request(`/api/accounts/${encodeURIComponent(accountID)}/session-preview`).then((payload) => { document.querySelector('#preview-dialog-body').innerHTML = renderSessionPreview(payload.preview); }).catch((error) => { closeDialog(previewDialog); setFooter(account, `会话预览失败：${error.message}`, 'error'); render(); }); }
       else if (button.dataset.deleteAccount) { deleteDialog.dataset.accountId = accountID; document.querySelector('#delete-dialog-account').textContent = account?.label || accountID; document.querySelector('#delete-dialog-error').textContent = ''; openDialog(deleteDialog); }
     }
     tabsRoot.addEventListener('click', (event) => {

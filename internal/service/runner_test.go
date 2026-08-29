@@ -375,6 +375,12 @@ func (f *fakeClient) Cookies() []state.Cookie {
 	return []state.Cookie{{Name: "new_api_refresh", Value: "refresh"}}
 }
 
+func (f *fakeClient) Sessions(context.Context, string) ([]lottery.SessionInfo, error) {
+	return nil, nil
+}
+
+func (f *fakeClient) RevokeSession(context.Context, string, string) error { return nil }
+
 func TestRunnerDashboardReusesLotteryToken(t *testing.T) {
 	store := testStore(t)
 	defer store.Close()

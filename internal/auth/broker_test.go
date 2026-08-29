@@ -55,6 +55,12 @@ type fakePlatform struct {
 	refreshCalls   int
 	loginCalls     int
 	bridgeCalls    int
+	sessionsCalls  int
+	revokeCalls    int
+	sessionsResult []lottery.SessionInfo
+	sessionsErr    error
+	revokedSIDs    []string
+	revokeErrs     map[string]error
 	userSelfErrs   []error
 	refreshResults []lottery.LoginResult
 	refreshErrs    []error
@@ -138,6 +144,29 @@ func (f *fakePlatform) Cookies() []state.Cookie {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]state.Cookie(nil), f.cookies...)
+}
+
+func (f *fakePlatform) Sessions(_ context.Context, _ string) ([]lottery.SessionInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sessionsCalls++
+	if f.sessionsErr != nil {
+		return nil, f.sessionsErr
+	}
+	return append([]lottery.SessionInfo(nil), f.sessionsResult...), nil
+}
+
+func (f *fakePlatform) RevokeSession(_ context.Context, _, sid string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.revokeCalls++
+	if f.revokeErrs != nil {
+		if err, ok := f.revokeErrs[sid]; ok {
+			return err
+		}
+	}
+	f.revokedSIDs = append(f.revokedSIDs, sid)
+	return nil
 }
 
 type brokerHarness struct {

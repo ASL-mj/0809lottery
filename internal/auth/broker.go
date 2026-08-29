@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -47,6 +48,8 @@ type PlatformClient interface {
 	Login(ctx context.Context, credentials lottery.Credentials) (lottery.LoginResult, error)
 	Bridge(ctx context.Context, parentAccessToken string, userID int64) (lottery.BridgeResult, error)
 	Cookies() []state.Cookie
+	Sessions(ctx context.Context, parentAccessToken string) ([]lottery.SessionInfo, error)
+	RevokeSession(ctx context.Context, parentAccessToken, sid string) error
 }
 
 // ClientFactory builds a platform client seeded with the account's cookies.
@@ -270,6 +273,13 @@ func (b *Broker) explicitLoginLocked(ctx context.Context, accountID string, bund
 		if err := b.capacityHook(ctx, accountID); err != nil {
 			return "", err
 		}
+		// The hook may have cleaned sessions and updated the ledger in the
+		// vault; reload so persisting below does not undo that bookkeeping.
+		if reloaded, loadErr := b.loadBundle(ctx, accountID); loadErr == nil {
+			reloaded.LoginName = bundle.LoginName
+			reloaded.Password = bundle.Password
+			*bundle = reloaded
+		}
 	}
 	result, err := client.Login(ctx, lottery.Credentials{Username: bundle.LoginName, Password: bundle.Password})
 	if err != nil {
@@ -325,6 +335,7 @@ func (b *Broker) persistParentSessionLocked(ctx context.Context, accountID strin
 	bundle.LotteryAccessToken = ""
 	bundle.LotteryAccessExpiresAt = time.Time{}
 	bundle.Cookies = cookiesFromState(client.Cookies())
+	b.trackManagedSession(bundle, bundle.ParentAccessToken)
 	return b.persistLocked(ctx, accountID, bundle, account.AuthHealthy)
 }
 
@@ -346,6 +357,45 @@ func (b *Broker) persistLocked(ctx context.Context, accountID string, bundle *se
 	// session.
 	_ = b.store.SetAuthHealth(accountID, health)
 	return nil
+}
+
+// trackManagedSession records the platform session a token belongs to so the
+// session-capability layer can later prove the workbench created it.
+func (b *Broker) trackManagedSession(bundle *secret.Bundle, accessToken string) {
+	sid := lottery.SessionIDFromAccessToken(accessToken)
+	if sid == "" {
+		return
+	}
+	now := b.currentTime().UTC()
+	updated := false
+	for index, item := range bundle.ManagedSessions {
+		if item.RemoteID == sid {
+			bundle.ManagedSessions[index].LastSeenAt = now
+			updated = true
+			break
+		}
+	}
+	if !updated {
+		bundle.ManagedSessions = append(bundle.ManagedSessions, secret.ManagedSession{
+			RemoteID:   sid,
+			Origin:     secret.SessionOriginWorkbench,
+			LastSeenAt: now,
+		})
+	}
+	// Keep the ledger bounded: newest entries win, pinned entries never age out.
+	const maxLedger = 24
+	if len(bundle.ManagedSessions) > maxLedger {
+		sort.SliceStable(bundle.ManagedSessions, func(left, right int) bool {
+			return bundle.ManagedSessions[left].LastSeenAt.After(bundle.ManagedSessions[right].LastSeenAt)
+		})
+		kept := bundle.ManagedSessions[:0]
+		for index, item := range bundle.ManagedSessions {
+			if index < maxLedger || item.Pinned {
+				kept = append(kept, item)
+			}
+		}
+		bundle.ManagedSessions = kept
+	}
 }
 
 func (b *Broker) loadBundle(ctx context.Context, accountID string) (secret.Bundle, error) {

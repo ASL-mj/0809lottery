@@ -1335,7 +1335,7 @@ func TestIndexExposesAccountManagementControls(t *testing.T) {
 		}
 	}
 	for _, feature := range []string{
-		"data-balance", "data-schedule-add", "data-schedule-remove",
+		"data-balance", "data-schedule-add", "data-schedule-remove", "data-session-cleanup",
 		"账户余额", "/api/accounts/", "draw-schedule",
 	} {
 		if !bytes.Contains(indexHTML, []byte(feature)) {

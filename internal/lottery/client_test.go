@@ -1,6 +1,7 @@
 package lottery
 
 import (
+	"encoding/base64"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -588,5 +589,56 @@ func TestPurchaseDrawAndUnlockDrawLimitValidateInputsAndStatus(t *testing.T) {
 	}
 	if _, err := client.UnlockDrawLimit(context.Background(), "lottery-token", "unlock:key"); !IsStatus(err, http.StatusOK) {
 		t.Fatalf("UnlockDrawLimit() error = %v, want APIError", err)
+	}
+}
+
+func TestSessionsAndRevokeSession(t *testing.T) {
+	var revokePath, revokeToken string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.URL.Path == "/api/user/sessions" && request.Method == http.MethodGet:
+			if request.Header.Get("Authorization") != "Bearer parent-token" {
+				t.Fatalf("sessions authorization = %q", request.Header.Get("Authorization"))
+			}
+			_, _ = writer.Write([]byte(`{"success":true,"data":[{"sid":"71f11630","current":true,"login_method":"password","created_at":1787954192,"last_active_at":1787954325,"expires_at":1790546192},{"sid":"5bbd5956","current":false}]}`))
+		case request.URL.Path == "/api/user/sessions/5bbd5956" && request.Method == http.MethodDelete:
+			revokePath = request.URL.Path
+			revokeToken = request.Header.Get("Authorization")
+			_, _ = writer.Write([]byte(`{"success":true,"data":{"current":false,"revoked_sid":"5bbd5956"}}`))
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, "test-agent", nil)
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	sessions, err := client.Sessions(context.Background(), "parent-token")
+	if err != nil || len(sessions) != 2 {
+		t.Fatalf("Sessions() = %#v, %v", sessions, err)
+	}
+	if sessions[0].SID != "71f11630" || !sessions[0].Current || sessions[0].LastActive.IsZero() {
+		t.Fatalf("session decode = %#v", sessions[0])
+	}
+	if err := client.RevokeSession(context.Background(), "parent-token", "5bbd5956"); err != nil {
+		t.Fatalf("RevokeSession() error = %v", err)
+	}
+	if revokePath != "/api/user/sessions/5bbd5956" || revokeToken != "Bearer parent-token" {
+		t.Fatalf("revoke request = %s %q", revokePath, revokeToken)
+	}
+}
+
+func TestSessionIDFromAccessToken(t *testing.T) {
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"token_use":"access","sid":"71f11630-293d","iss":"new-api"}`))
+	token := "header." + payload + ".signature"
+	if got := SessionIDFromAccessToken(token); got != "71f11630-293d" {
+		t.Fatalf("SessionIDFromAccessToken() = %q", got)
+	}
+	for _, broken := range []string{"", "not-a-jwt", "a.b.c", "header." + base64.RawURLEncoding.EncodeToString([]byte(`{"no_sid":1}`)) + ".sig"} {
+		if got := SessionIDFromAccessToken(broken); got != "" {
+			t.Fatalf("SessionIDFromAccessToken(%q) = %q, want empty", broken, got)
+		}
 	}
 }

@@ -175,9 +175,7 @@ func (s *Server) sharedBrokerLocked() (*auth.Broker, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.broker = auth.NewBroker(store, vault, func(cookies []state.Cookie) (auth.PlatformClient, error) {
-		return lottery.NewClient(s.cfg.BaseURL, s.cfg.UserAgent, cookies)
-	})
+	s.broker = auth.NewBroker(store, vault, s.platformClientFactory())
 	return s.broker, nil
 }
 
@@ -185,6 +183,10 @@ func (s *Server) sharedBrokerLocked() (*auth.Broker, error) {
 func (s *Server) sharedVault() (secret.Vault, error) {
 	s.storeMu.Lock()
 	defer s.storeMu.Unlock()
+	return s.sharedVaultLocked()
+}
+
+func (s *Server) sharedVaultLocked() (secret.Vault, error) {
 	if s.vault != nil {
 		return s.vault, nil
 	}
@@ -205,6 +207,12 @@ func (s *Server) sharedVault() (secret.Vault, error) {
 	return s.vault, nil
 }
 
+func (s *Server) platformClientFactory() auth.ClientFactory {
+	return func(cookies []state.Cookie) (auth.PlatformClient, error) {
+		return lottery.NewClient(s.cfg.BaseURL, s.cfg.UserAgent, cookies)
+	}
+}
+
 // sharedGuard builds the session-capacity guard and installs it as the
 // broker's only password-login gate.
 func (s *Server) sharedGuard() (*auth.CapacityGuard, error) {
@@ -216,7 +224,12 @@ func (s *Server) sharedGuard() (*auth.CapacityGuard, error) {
 	if _, err := s.sharedBrokerLocked(); err != nil {
 		return nil, err
 	}
-	s.guard = auth.NewCapacityGuard(auth.NewUnsupportedSessionManager(), s.cfg.SessionLimit, s.cfg.SessionSafetyMargin)
+	vault, err := s.sharedVaultLocked()
+	if err != nil {
+		return nil, err
+	}
+	manager := auth.NewPlatformSessionManager(vault, s.platformClientFactory(), s.cfg.DurableSessionLimit)
+	s.guard = auth.NewCapacityGuard(manager, s.cfg.SessionLimit, s.cfg.SessionSafetyMargin)
 	s.broker.SetCapacityGuard(s.guard.BeforeLogin)
 	return s.guard, nil
 }

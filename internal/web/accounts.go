@@ -249,13 +249,16 @@ func (s *Server) handleAccountActions(writer http.ResponseWriter, request *http.
 		}
 		return
 	}
-	if len(parts) != 4 {
+	if len(parts) != 4 && !(len(parts) == 5 && parts[3] == "sessions") {
 		writeError(writer, http.StatusNotFound, "操作不存在")
 		return
 	}
 	action := parts[3]
+	if len(parts) == 5 && parts[3] == "sessions" {
+		action = action + "/" + parts[4]
+	}
 	switch action {
-	case "checkin", "claim", "draw", "activity", "purchase-draw", "unlock-pass", "reauthenticate", "validate", "balance":
+	case "checkin", "claim", "draw", "activity", "purchase-draw", "unlock-pass", "reauthenticate", "validate", "balance", "sessions/cleanup":
 		if request.Method != http.MethodPost {
 			writeError(writer, http.StatusMethodNotAllowed, "请求方法不支持")
 			return
@@ -300,6 +303,8 @@ func (s *Server) handleAccountActions(writer http.ResponseWriter, request *http.
 		s.handleAccountValidate(writer, request, record)
 	case "session-preview":
 		s.handleSessionPreview(writer, request, record)
+	case "sessions/cleanup":
+		s.handleSessionCleanup(writer, request, record)
 	case "draw-schedule":
 		if request.Method == http.MethodGet {
 			s.handleDrawScheduleGet(writer, request, record)
@@ -569,25 +574,82 @@ func (s *Server) bindRemoteUserAfterAuth(ctx context.Context, store *state.Store
 	return nil
 }
 
-// handleSessionPreview reports the remote-session cleanup capability. With
-// the unsupported manager it explicitly says cleanup is unavailable.
+// handleSessionPreview reports the remote-session cleanup capability with a
+// live session list. Serialized per account via the auth lock.
 func (s *Server) handleSessionPreview(writer http.ResponseWriter, request *http.Request, record account.Record) {
 	guard, err := s.sharedGuard()
 	if err != nil {
 		writeStoreError(writer, err)
 		return
 	}
+	store, err := s.sharedStore()
+	if err != nil {
+		writeStoreError(writer, err)
+		return
+	}
 	ctx, cancel := context.WithTimeout(request.Context(), 30*time.Second)
 	defer cancel()
+	release := store.LockAuth(record.ID)
+	defer release()
 	preview, err := guard.Preview(ctx, record.ID)
 	if err != nil {
-		writeError(writer, http.StatusBadGateway, "会话预览暂时失败，请稍后重试")
+		log.Printf("session preview failed for account=%s: %v", record.ID, err)
+		writeError(writer, http.StatusBadGateway, "会话预览暂时失败：认证可能已失效，请先重新认证")
 		return
 	}
 	preview.GeneratedAt = time.Now().UTC()
 	writeJSON(writer, http.StatusOK, map[string]interface{}{
 		"account_id": record.ID,
 		"preview":    preview,
+	})
+}
+
+type sessionCleanupRequest struct {
+	Confirm bool `json:"confirm"`
+}
+
+// handleSessionCleanup revokes the current cleanup candidates after an
+// explicit confirmation. Unknown devices, the current session and pinned
+// durable sessions are never touched.
+func (s *Server) handleSessionCleanup(writer http.ResponseWriter, request *http.Request, record account.Record) {
+	var input sessionCleanupRequest
+	if err := decodeRequest(writer, request, &input); err != nil {
+		writeError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
+	if !input.Confirm {
+		writeError(writer, http.StatusBadRequest, "会话清理需要显式确认字段 confirm=true")
+		return
+	}
+	guard, err := s.sharedGuard()
+	if err != nil {
+		writeStoreError(writer, err)
+		return
+	}
+	cleaner, ok := guard.Manager().(auth.SessionCleaner)
+	if !ok {
+		writeError(writer, http.StatusConflict, "远端会话清理不可用：平台会话接口尚未确认")
+		return
+	}
+	store, err := s.sharedStore()
+	if err != nil {
+		writeStoreError(writer, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), 60*time.Second)
+	defer cancel()
+	release := store.LockAuth(record.ID)
+	defer release()
+	result, err := cleaner.Cleanup(ctx, record.ID)
+	if err != nil {
+		log.Printf("session cleanup failed for account=%s: %v", record.ID, err)
+		writeError(writer, http.StatusBadGateway, "会话清理暂时失败：认证可能已失效，请先重新认证")
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]interface{}{
+		"account_id": record.ID,
+		"revoked":    result.Revoked,
+		"failed":     result.Failed,
 	})
 }
 
