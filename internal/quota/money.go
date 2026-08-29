@@ -159,9 +159,26 @@ func ParseUSDFloat(value float64) (USDAmount, error) {
 	return USDAmount{rat: rat}, nil
 }
 
-// displayUSD renders a confirmed amount as a two-decimal dollar string using
-// half-up rounding on the exact value.
+// displayUSD renders a confirmed amount as a dollar string using half-up
+// rounding for cent-sized values and exact significant decimals for non-zero
+// sub-cent values.
 func displayUSD(value *big.Rat) string {
+	if value == nil || value.Sign() == 0 {
+		return "$0.00"
+	}
+	// Keep sub-cent rewards visible. The platform can return small, non-zero
+	// quota awards that would otherwise round to the misleading "$0.00".
+	absolute := new(big.Rat).Set(value)
+	if absolute.Sign() < 0 {
+		absolute.Neg(absolute)
+	}
+	if absolute.Cmp(big.NewRat(1, 200)) < 0 {
+		prefix := "$"
+		if value.Sign() < 0 {
+			prefix = "-$"
+		}
+		return prefix + exactDecimal(absolute)
+	}
 	cents := new(big.Rat).Mul(value, big.NewRat(100, 1))
 	negative := cents.Sign() < 0
 	if negative {

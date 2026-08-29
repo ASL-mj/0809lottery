@@ -2,7 +2,6 @@ package web
 
 import (
 	"context"
-	"crypto/subtle"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -26,6 +25,9 @@ import (
 //go:embed static/index.html
 var indexHTML []byte
 
+//go:embed static/login.html
+var loginHTML []byte
+
 const (
 	maxRequestBodySize = 8 << 10
 	maxRuntimeLogs     = 200
@@ -40,21 +42,23 @@ var shanghaiLocation = func() *time.Location {
 }()
 
 type Server struct {
-	cfg     config.Config
-	storeMu sync.Mutex
-	store   *state.Store
-	broker  *auth.Broker
-	guard   *auth.CapacityGuard
-	vault   secret.Vault
-	csrfMu  sync.Mutex
-	csrf    string
+	cfg           config.Config
+	storeMu       sync.Mutex
+	store         *state.Store
+	broker        *auth.Broker
+	guard         *auth.CapacityGuard
+	vault         secret.Vault
+	adminMu       sync.Mutex
+	adminSessions *adminSessionStore
+	csrfMu        sync.Mutex
+	csrf          string
 	// vaultFactory is overridden in tests to bridge legacy persisted auth
 	// state; production always uses the encrypted file vault.
 	vaultFactory func(store *state.Store) (secret.Vault, error)
 }
 
 func NewServer(cfg config.Config) *Server {
-	return &Server{cfg: cfg}
+	return &Server{cfg: cfg, adminSessions: newAdminSessionStore()}
 }
 
 func (s *Server) Run(ctx context.Context) error {
@@ -245,6 +249,9 @@ func (s *Server) runnerFor(store *state.Store) (*service.Runner, error) {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
+	mux.HandleFunc("/login", s.handleLogin)
+	mux.HandleFunc("/api/admin/login", s.handleAdminLogin)
+	mux.HandleFunc("/api/admin/logout", s.handleAdminLogout)
 	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/accounts", s.handleAccounts)
 	mux.HandleFunc("/api/accounts/", s.handleAccountActions)
@@ -252,7 +259,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/subscriptions/query", s.handleSubscriptionQuery)
 	mux.HandleFunc("/api/auto-draw-status", s.handleAutoDrawStatus)
 	mux.HandleFunc("/api/runtime-logs", s.handleRuntimeLogs)
-	return s.withSecurityHeaders(s.withBasicAuth(s.withCSRF(mux)))
+	return s.withSecurityHeaders(s.withAdminAuth(s.withCSRF(mux)))
 }
 
 func (s *Server) handleRuntimeLogs(writer http.ResponseWriter, request *http.Request) {
@@ -266,15 +273,15 @@ func (s *Server) handleRuntimeLogs(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	type runtimeLogView struct {
-		ID            string    `json:"id"`
-		OccurredAt    time.Time `json:"occurred_at"`
-		AccountID     string    `json:"account_id"`
-		AccountLabel  string    `json:"account_label,omitempty"`
-		WindowID      string    `json:"window_id"`
-		Status        string    `json:"status"`
-		Message       string    `json:"message"`
-		PrizeLabel    string        `json:"prize_label,omitempty"`
-		QuotaDeltaUSD *quota.Money  `json:"quota_delta_usd,omitempty"`
+		ID            string       `json:"id"`
+		OccurredAt    time.Time    `json:"occurred_at"`
+		AccountID     string       `json:"account_id"`
+		AccountLabel  string       `json:"account_label,omitempty"`
+		WindowID      string       `json:"window_id"`
+		Status        string       `json:"status"`
+		Message       string       `json:"message"`
+		PrizeLabel    string       `json:"prize_label,omitempty"`
+		QuotaDeltaUSD *quota.Money `json:"quota_delta_usd,omitempty"`
 	}
 	registry := store.AccountRegistry()
 	logs := store.RuntimeLogs(maxRuntimeLogs)
@@ -423,15 +430,6 @@ func (s *Server) handleHealth(writer http.ResponseWriter, request *http.Request)
 	writeJSON(writer, http.StatusOK, map[string]interface{}{"ok": true, "service": "account-workbench", "time": time.Now().UTC()})
 }
 
-
-
-
-
-
-
-
-
-
 func (s *Server) handleDrawCountQuery(writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodPost {
 		writeError(writer, http.StatusMethodNotAllowed, "请求方法不支持")
@@ -560,29 +558,9 @@ func singleSubscriptionView(accountID string, report service.SubscriptionReport)
 	}
 }
 
-
-
-
-
-
-
 func writeUpstreamError(writer http.ResponseWriter, action, accountID string, err error, message string) {
 	log.Printf("web %s failed for account=%s: %v", action, accountID, err)
 	writeError(writer, http.StatusBadGateway, message)
-}
-
-func (s *Server) withBasicAuth(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		username, password, ok := request.BasicAuth()
-		usernameOK := subtle.ConstantTimeCompare([]byte(username), []byte(s.cfg.WebUser)) == 1
-		passwordOK := subtle.ConstantTimeCompare([]byte(password), []byte(s.cfg.WebPass)) == 1
-		if !ok || !usernameOK || !passwordOK {
-			writer.Header().Set("WWW-Authenticate", `Basic realm="0809 Account Workbench", charset="UTF-8"`)
-			writeError(writer, http.StatusUnauthorized, "需要工作台管理员认证")
-			return
-		}
-		next.ServeHTTP(writer, request)
-	})
 }
 
 func (s *Server) withSecurityHeaders(next http.Handler) http.Handler {
@@ -631,7 +609,6 @@ func firstNonEmpty(values ...string) string {
 	}
 	return ""
 }
-
 
 // requireKnownAccount checks the registry before any upstream query.
 func requireKnownAccount(store *state.Store, accountID string) error {

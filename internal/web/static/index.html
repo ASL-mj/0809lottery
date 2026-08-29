@@ -16,11 +16,13 @@
     .layout__main { min-width:0; }
     .layout__side { min-width:0; position:sticky; top:24px; padding-top:18px; }
     header { display:flex; align-items:flex-end; justify-content:space-between; gap:28px; padding:0 2px 22px; border-bottom:1px solid var(--line-strong); }
-    h1 { margin:0; font-size:24px; line-height:1.2; font-weight:720; letter-spacing:-.02em; }
+    h1 { margin:0; font-size:24px; line-height:1.2; font-weight:720; letter-spacing:0; }
     header p { margin:5px 0 0; color:var(--muted); font-size:13px; }
+    .header-actions { display:flex; align-items:center; justify-content:flex-end; gap:12px; }
     .page-note { color:var(--muted); font-size:12px; white-space:nowrap; }
+    .page-note--error { color:var(--error); }
     #accounts { padding-top:20px; }
-    #accounts > .account { max-width:780px; }
+    #accounts > .account { max-width:none; }
     .account-tabs { display:flex; flex-wrap:wrap; gap:8px; padding:18px 2px 0; }
     .account-tab { appearance:none; min-width:0; display:inline-flex; align-items:center; gap:7px; max-width:280px; padding:8px 14px; border:1px solid var(--line-strong); border-radius:999px; background:var(--paper); color:var(--muted); font-size:13px; line-height:1.2; cursor:pointer; transition:background-color 160ms ease,color 160ms ease,border-color 160ms ease; }
     .account-tab:hover { border-color:var(--ink); color:var(--ink); }
@@ -65,23 +67,23 @@
     .auto-draw__step--failed .auto-draw__status { color:var(--error); }
     .auto-draw__error { margin-top:7px; color:var(--error); font-size:11px; }
     .auto-draw__empty { margin:0; padding:2px 0 8px; color:var(--muted); font-size:11px; }
-    .auto-draw__form { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-top:10px; }
-    .auto-draw__form .sched-kind, .auto-draw__form .sched-start, .auto-draw__form .sched-end { font:inherit; font-size:12px; padding:5px 7px; border:1px solid var(--line-strong); border-radius:5px; background:var(--paper); color:var(--ink); }
     .auto-draw__step .action--compact { margin-top:4px; height:24px; font-size:10px; padding:0 8px; }
-    .balance-section { padding-bottom:18px; }
+    .metrics-groups { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; align-items:start; }
+    .metric-group { min-width:0; padding:13px 13px 14px; border:1px solid var(--line); border-radius:6px; background:var(--paper); }
+    .balance-section, .token-usage-section, .draw-section, .activity-section { padding-bottom:14px; }
     .account__body { flex:1; padding:17px 18px 16px; }
-    .draw-section { padding-bottom:18px; }
+    .draw-section { padding-bottom:14px; }
     .section-head { min-width:0; display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:6px 14px; margin-bottom:10px; }
     .section-title { margin:0; color:var(--muted); font-size:12px; font-weight:540; }
     .section-meta { min-width:0; color:#8b8b86; font-size:11px; text-align:right; overflow-wrap:anywhere; }
     .metrics { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); border-top:1px solid var(--line); border-bottom:1px solid var(--line); background:#fbfbfa; }
-    .metric { min-width:0; padding:12px 13px 11px; border-right:1px solid var(--line); }
+    .metric { min-width:0; padding:9px 8px 8px; border-right:1px solid var(--line); }
     .metric:last-child { border-right:0; }
-    .metric__label { color:var(--muted); font-size:11px; }
-    .metric__value { margin-top:2px; font-size:18px; line-height:1.2; font-weight:690; font-variant-numeric:tabular-nums; }
+    .metric__label { color:var(--muted); font-size:10px; line-height:1.25; overflow-wrap:anywhere; }
+    .metric__value { margin-top:2px; font-size:16px; line-height:1.2; font-weight:690; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
     .metric__unit { margin-left:2px; color:var(--muted); font-size:11px; font-weight:450; }
     .draw-empty { min-height:74px; display:flex; align-items:center; padding:0 13px; border-top:1px solid var(--line); border-bottom:1px solid var(--line); background:#fbfbfa; color:var(--muted); }
-    .activity-section { padding-bottom:18px; }
+    .activity-section { padding-bottom:14px; }
     .activity-toolbar { display:inline-flex; align-items:center; gap:6px; }
     .activity-note { margin-top:10px; color:var(--muted); font-size:12px; }
     .activity-note--error { color:var(--error); }
@@ -113,10 +115,26 @@
     .account-dialog form { padding:18px; display:grid; gap:10px; }
     .account-dialog h3 { margin:0; font-size:16px; }
     .account-dialog label { display:grid; gap:4px; color:var(--muted); font-size:12px; }
-    .account-dialog input { font:inherit; padding:8px 10px; border:1px solid var(--line-strong); border-radius:5px; }
+    .account-dialog input, .account-dialog select { font:inherit; padding:8px 10px; border:1px solid var(--line-strong); border-radius:5px; background:var(--paper); color:var(--ink); }
     .account-dialog .dialog-error { color:var(--error); font-size:12px; min-height:16px; margin:0; }
     .account-dialog__row { display:flex; gap:8px; justify-content:flex-end; }
     .account-dialog__row--start { justify-content:flex-start; margin-bottom:10px; }
+    .reauth-dialog { width:min(520px,calc(100vw - 32px)); min-width:0; max-width:calc(100vw - 32px); }
+    .reauth-dialog form { padding:24px; gap:16px; }
+    .reauth-dialog h3 { font-size:20px; line-height:1.25; }
+    .reauth-dialog__account { display:flex; align-items:baseline; gap:8px; margin:0; color:var(--muted); font-size:13px; }
+    .reauth-dialog__account strong { min-width:0; color:var(--ink); font-size:15px; overflow-wrap:anywhere; word-break:break-word; }
+    .reauth-dialog__warning { margin:0; color:var(--muted); font-size:13px; line-height:1.6; overflow-wrap:anywhere; }
+    .reauth-dialog__confirm { display:flex !important; align-items:flex-start; gap:9px; margin:0; padding:11px 12px; border:1px solid var(--line); border-radius:6px; background:var(--soft); color:var(--ink) !important; font-size:13px !important; line-height:1.45; }
+    .reauth-dialog__confirm input[type="checkbox"] { flex:none; width:16px; height:16px; margin:2px 0 0; padding:0; accent-color:var(--ink); }
+    .reauth-dialog .dialog-error { min-height:0; margin-top:-6px; }
+    .reauth-dialog .account-dialog__row { padding-top:14px; border-top:1px solid var(--line); }
+    .schedule-dialog { min-width:360px; }
+    .schedule-dialog__hint { margin:0; color:var(--muted); font-size:12px; line-height:1.45; }
+    .schedule-dialog__fields { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+    .schedule-dialog__fields label:first-child { grid-column:1 / -1; }
+    .schedule-dialog__fields label[aria-hidden="true"] { opacity:.5; }
+    @media (max-width:460px) { .schedule-dialog { min-width:0; width:calc(100% - 24px); } .schedule-dialog__fields { grid-template-columns:1fr; } .schedule-dialog__fields label:first-child { grid-column:auto; } }
     .preview-state { color:var(--muted); font-size:13px; margin-bottom:8px; }
     .preview-dialog ul { margin:0; padding-left:18px; color:var(--ink); font-size:13px; }
     .preview-sessions { list-style:none; margin:0 0 12px; padding:0; display:grid; gap:6px; }
@@ -145,6 +163,87 @@
     .runtime-log__status--error { border-color:#d7b0b0; background:#fdf3f3; color:var(--error); }
     .runtime-log__meta { display:flex; flex-wrap:wrap; gap:6px 16px; margin-top:7px; color:var(--muted); font-size:12px; }
     .runtime-log__message { margin-top:8px; color:var(--ink); overflow-wrap:anywhere; word-break:break-word; }
+    /* v13 compact card layout */
+    .account__actions { grid-template-columns:1.25fr 1fr 1fr repeat(5,minmax(0,1fr)); }
+    .account__actions .action { padding:0 7px; font-size:11px; }
+    .metrics-groups { align-items:stretch; }
+    .metric-group { display:flex; flex-direction:column; min-height:126px; padding:11px 11px 10px; }
+    .account__actions .action { overflow:hidden; text-overflow:ellipsis; }
+    .metric-group__head { display:flex; align-items:center; justify-content:space-between; gap:6px; margin-bottom:8px; }
+    .metric-group__title { min-width:0; color:var(--muted); font-size:11px; font-weight:650; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .metric-group__meta { min-width:0; margin-left:auto; color:#8b8b86; font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .metric-group__refresh-button { flex:none; width:22px; height:22px; display:inline-flex; align-items:center; justify-content:center; padding:0; border:0; border-radius:4px; background:transparent; color:#8b8b86; cursor:pointer; }
+    .metric-group__refresh-button:hover:not(:disabled) { background:#f0f0ed; color:var(--ink); }
+    .metric-group__refresh-button:focus-visible { outline:2px solid var(--ink); outline-offset:1px; }
+    .metric-group__refresh-button svg { width:13px; height:13px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+    .metric-pair { min-width:0; display:grid; grid-template-columns:minmax(0,1fr) auto minmax(0,1fr); gap:5px; align-items:baseline; padding-bottom:7px; border-bottom:1px solid #eeeeeb; }
+    .metric-pair__item { min-width:0; }
+    .metric-pair__value { display:block; color:var(--ink); font-size:15px; line-height:1.1; font-weight:700; font-variant-numeric:tabular-nums; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .metric-pair__label { display:block; margin-top:2px; color:#8b8b86; font-size:9px; line-height:1.2; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .metric-pair__divider { color:#b5b5b0; font-size:13px; }
+    .metric-subline { display:flex; align-items:baseline; justify-content:space-between; gap:6px; min-width:0; padding-top:7px; color:var(--muted); font-size:10px; line-height:1.2; }
+    .metric-subline__label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .metric-subline__value { flex:none; color:var(--ink); font-size:11px; font-weight:650; font-variant-numeric:tabular-nums; white-space:nowrap; }
+    .metric-group__empty { flex:1; display:flex; align-items:center; min-height:54px; color:var(--muted); font-size:11px; }
+    .metric-group__empty--error { color:var(--error); }
+    .metric-group--ok .metric-subline__value { color:var(--ok); }
+    .metric-group--ok .metric-pair__value { color:var(--ok); }
+    .account__purchase-row { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; padding:0 14px 10px; border-bottom:1px solid var(--line); background:var(--soft); }
+    .account__purchase-row .action { min-height:34px; height:auto; white-space:normal; line-height:1.3; }
+    .status-line { min-width:0; display:flex; align-items:center; gap:7px; padding:9px 18px; border-bottom:1px solid var(--line); color:var(--muted); font-size:11px; }
+    .status-line__dot { width:6px; height:6px; flex:none; border-radius:50%; background:#5b8b69; box-shadow:0 0 0 3px #edf5ef; }
+    .status-line__text { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .status-line__reward { flex:none; display:inline-flex; align-items:center; padding:2px 7px; border:1px solid var(--ok-line); border-radius:999px; background:var(--ok-bg); color:var(--ok); font-size:10px; font-weight:650; white-space:nowrap; }
+    .status-line__link { margin-left:auto; flex:none; color:var(--ink); font-weight:650; }
+    .details { padding:11px 14px 13px; }
+    .details-split { display:grid; grid-template-columns:minmax(0,1.1fr) minmax(0,.8fr) minmax(0,1fr); gap:10px; }
+    .details-column { min-width:0; padding:10px; border:1px solid var(--line); border-radius:6px; background:#fcfcfa; }
+    .details__title { margin:0 0 8px; color:var(--muted); font-size:11px; font-weight:650; }
+    .plan-column-head, .subscription-column-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
+    .plan-column-head .details__title, .subscription-column-head .details__title { margin-bottom:0; }
+    .plan-settings, .subscription-refresh { flex:none; height:26px; display:inline-flex; align-items:center; gap:4px; padding:0 8px; border:1px solid var(--line-strong); border-radius:5px; background:var(--paper); color:var(--muted); font-size:10px; cursor:pointer; }
+    .plan-settings { border-color:var(--ink); background:var(--ink); color:var(--paper); }
+    .plan-settings:hover:not(:disabled), .subscription-refresh:hover:not(:disabled) { border-color:var(--ink); color:var(--ink); background:#f0f0ed; }
+    .plan-settings:hover:not(:disabled) { background:#303030; color:var(--paper); }
+    .plan-settings svg, .subscription-refresh svg { width:12px; height:12px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+    .plan-list, .subscription-list { display:grid; gap:6px; }
+    .plan-list { margin:0; padding:0; list-style:none; }
+    .plan-row, .subscription-item { min-width:0; display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:8px; align-items:center; padding:8px 9px; border:1px solid var(--line); border-radius:5px; background:var(--paper); }
+    .plan-row__main { min-width:0; }
+    .plan-row__mode { display:block; margin-top:2px; color:#8b8b86; font-size:9px; line-height:1.2; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .plan-row__time { display:block; min-width:0; color:var(--ink); font-size:11px; font-weight:650; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .plan-row__status { color:var(--ok); font-size:10px; font-weight:650; white-space:nowrap; }
+    .plan-row__status--pending { color:#8b5d24; }
+    .subscription-item { grid-template-columns:minmax(0,1fr) auto; }
+    .subscription-item__name { min-width:0; color:var(--ink); font-size:11px; font-weight:650; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .subscription-item__meta { margin-top:2px; color:#8b8b86; font-size:9px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .subscription-item__quota { color:var(--ink); font-size:12px; font-weight:700; font-variant-numeric:tabular-nums; text-align:right; white-space:nowrap; }
+    .subscription-item__quota span { display:block; margin-top:2px; color:#8b8b86; font-size:9px; font-weight:450; }
+    .draw-history-list { display:grid; gap:6px; max-height:164px; overflow-y:auto; padding-right:2px; }
+    .draw-history-item { min-width:0; padding:8px 9px; border:1px solid var(--line); border-radius:5px; background:var(--paper); }
+    .draw-history-item__head { display:flex; align-items:center; gap:6px; min-width:0; }
+    .draw-history-item__source { color:var(--muted); font-size:9px; font-weight:550; white-space:nowrap; }
+    .draw-history-item__title { min-width:0; color:var(--ink); font-size:11px; font-weight:680; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .draw-history-item__time { min-width:0; color:#8b8b86; font-size:9px; white-space:nowrap; }
+    .draw-history-item__status { margin-left:auto; flex:none; color:var(--muted); font-size:10px; font-weight:650; white-space:nowrap; }
+    .draw-history-item__status--ok { color:var(--ok); }
+    .draw-history-item__status--error { color:var(--error); }
+    .draw-history-item__detail { margin-top:3px; color:var(--ink); font-size:9px; line-height:1.35; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .draw-history-item__meta { display:flex; flex-wrap:wrap; gap:3px 8px; margin-top:3px; color:#8b8b86; font-size:9px; line-height:1.25; }
+    .draw-history-item__meta span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .auto-draw { padding:0; border:0; background:transparent; }
+    .auto-draw__head { margin:0; }
+    .auto-draw__title { display:none; }
+    .auto-draw__summary { color:var(--muted); font-size:11px; }
+    .auto-draw__timeline { display:none; }
+    .auto-draw__empty { margin:0 0 8px; color:var(--muted); font-size:11px; }
+    .auto-draw__error { margin-top:7px; color:var(--error); font-size:11px; }
+    .auto-draw__step { list-style:none; }
+    .auto-draw__dot { display:none; }
+    .auto-draw__time, .auto-draw__status { font-size:11px; }
+    .auto-draw__step .action--compact { margin-top:0; height:24px; font-size:10px; }
+    .account__body > .details { margin-top:0; }
+    .account__body { padding:0; }
     @media (max-width:1040px) {
       main { width:min(760px,calc(100% - 36px)); }
       .layout { grid-template-columns:1fr; gap:22px; }
@@ -153,22 +252,28 @@
     @media (max-width:620px) {
       main { width:min(100% - 24px,520px); padding-top:26px; }
       header { align-items:flex-start; flex-direction:column; gap:8px; }
+      .header-actions { width:100%; justify-content:space-between; }
       .page-note { white-space:normal; }
-      .account__actions { grid-template-columns:repeat(2,minmax(0,1fr)); }
+      .account__actions { grid-template-columns:repeat(4,minmax(0,1fr)); }
       .action--primary { grid-column:span 2; }
-      .metrics { grid-template-columns:repeat(3,minmax(84px,1fr)); }
+      .metrics-groups { grid-template-columns:repeat(2,minmax(0,1fr)); }
+      .metrics { grid-template-columns:repeat(3,minmax(0,1fr)); }
       .section-meta { width:100%; text-align:left; }
       .runtime-panel__header { flex-direction:column; align-items:stretch; }
+    .details-split { grid-template-columns:1fr; }
+    }
+    @media (max-width:460px) {
+      .metrics-groups { grid-template-columns:1fr; }
     }
     @media (max-width:390px) {
-      .purchase-actions { grid-template-columns:1fr; }
+      .account__purchase-row { grid-template-columns:1fr; }
     }
     @media (prefers-reduced-motion:reduce) { *,*::before,*::after { scroll-behavior:auto!important; transition:none!important; } }
   </style>
 </head>
 <body>
   <main>
-    <header><div><h1>0809 账号工作台</h1><p>每个账号独立管理与查询。认证材料仅在服务端状态文件中使用。</p></div><div class="page-note">额度统一以美元显示</div></header>
+    <header><div><h1>0809 账号工作台</h1><p>每个账号独立管理与查询。认证材料仅在服务端状态文件中使用。</p></div><div class="header-actions"><div id="admin-logout-error" class="page-note" role="status" aria-live="polite"></div><div class="page-note">额度统一以美元显示</div><button id="admin-logout" class="action action--compact" type="button">退出登录</button></div></header>
     <div class="layout">
       <div class="layout__main">
         <nav class="account-tabs" id="account-tabs" aria-label="账号切换"></nav>
@@ -177,7 +282,7 @@
       <aside class="layout__side">
         <section class="runtime-panel" aria-labelledby="runtime-logs-title">
           <div class="runtime-panel__header">
-            <div><h2 id="runtime-logs-title" class="runtime-panel__title">系统运行日志</h2><p class="runtime-panel__description">自动抽奖执行结果，最新优先展示。</p></div>
+            <div><h2 id="runtime-logs-title" class="runtime-panel__title">系统运行日志</h2><p class="runtime-panel__description">抽奖执行结果，最新优先展示。</p></div>
             <button id="runtime-logs-refresh" class="action action--compact" type="button">刷新日志</button>
           </div>
           <div id="runtime-logs" class="runtime-list" aria-live="polite" aria-busy="true"><div class="runtime-state">正在读取运行日志...</div></div>
@@ -195,12 +300,26 @@
       <div class="account-dialog__row"><button type="button" class="action" id="account-dialog-cancel">取消</button><button type="submit" class="action action--primary">保存</button></div>
     </form>
   </dialog>
-  <dialog id="reauth-dialog" class="account-dialog">
+  <dialog id="schedule-dialog" class="account-dialog schedule-dialog">
+    <form>
+      <h3>设置自动抽奖</h3>
+      <p class="schedule-dialog__hint">账号：<strong id="schedule-dialog-account"></strong></p>
+      <div class="schedule-dialog__fields">
+        <label>计划类型<select id="schedule-dialog-kind"><option value="fixed">固定时间</option><option value="random">时段随机</option></select></label>
+        <label>开始时间<input id="schedule-dialog-start" type="time" required></label>
+        <label id="schedule-dialog-end-label">结束时间<input id="schedule-dialog-end" type="time"></label>
+      </div>
+      <p class="schedule-dialog__hint" id="schedule-dialog-help">每天在指定时间执行一次。</p>
+      <p class="dialog-error" id="schedule-dialog-error"></p>
+      <div class="account-dialog__row"><button type="button" class="action" id="schedule-dialog-cancel">取消</button><button type="submit" class="action action--primary" id="schedule-dialog-submit">添加计划</button></div>
+    </form>
+  </dialog>
+  <dialog id="reauth-dialog" class="account-dialog reauth-dialog">
     <form>
       <h3>重新认证</h3>
-      <p>账号：<strong id="reauth-dialog-account"></strong></p>
-      <p class="preview-state">将使用保存的密码向平台发起一次新的登录，可能占用一个平台会话名额。远端会话清理不可用时，请确认当前平台的会话数量仍有余量。</p>
-      <label><input type="checkbox" id="reauth-dialog-confirm" required>我确认要立即重新认证</label>
+      <p class="reauth-dialog__account"><span>账号</span><strong id="reauth-dialog-account"></strong></p>
+      <p class="reauth-dialog__warning">将使用保存的密码向平台发起一次新的登录，可能占用一个平台会话名额。远端会话清理不可用时，请确认当前平台的会话数量仍有余量。</p>
+      <label class="reauth-dialog__confirm"><input type="checkbox" id="reauth-dialog-confirm" required><span>我确认要立即重新认证</span></label>
       <p class="dialog-error" id="reauth-dialog-error"></p>
       <div class="account-dialog__row"><button type="button" class="action" id="reauth-dialog-cancel">取消</button><button type="submit" class="action action--primary">重新认证</button></div>
     </form>
@@ -229,6 +348,8 @@
     const tabsRoot = document.querySelector('#account-tabs');
     const logsRoot = document.querySelector('#runtime-logs');
     const logsRefreshButton = document.querySelector('#runtime-logs-refresh');
+    const logoutButton = document.querySelector('#admin-logout');
+    const logoutError = document.querySelector('#admin-logout-error');
     const icons = {
       checkin: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 2v4M16 2v4M3 10h18"/><rect x="3" y="4" width="18" height="17" rx="2"/><path d="m9 16 2 2 4-4"/></svg>',
       claim: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12v8H4v-8M2 7h20v5H2zM12 22V7M12 7H7.5A2.5 2.5 0 1 1 10 4.5C10 7 12 7 12 7ZM12 7h4.5A2.5 2.5 0 1 0 14 4.5C14 7 12 7 12 7Z"/></svg>',
@@ -248,6 +369,7 @@
       afternoon: '午间 13:00–14:00',
       midday: '午间 13:00–14:00',
       evening: '晚间 18:00–19:00',
+      manual: '手动抽奖',
     };
     const autoDrawWindows = [
       { id: 'morning', time: '08:00–09:00' },
@@ -260,6 +382,17 @@
       const date = new Date(value);
       if (Number.isNaN(date.getTime()) || date.getUTCFullYear() < 2000) return '';
       return new Intl.DateTimeFormat('zh-CN', { dateStyle:'medium', timeStyle:'short', hour12:false, timeZone:'Asia/Shanghai' }).format(date);
+    };
+    const formatRelativeTime = (value) => {
+      if (!value) return '';
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime()) || date.getUTCFullYear() < 2000) return '';
+      const elapsedMinutes = Math.max(0, Math.floor((Date.now() - date.getTime()) / 60000));
+      if (elapsedMinutes < 1) return '刚刚';
+      if (elapsedMinutes < 60) return `${elapsedMinutes} 分钟前`;
+      const elapsedHours = Math.floor(elapsedMinutes / 60);
+      if (elapsedHours < 24) return `${elapsedHours} 小时前`;
+      return `${Math.floor(elapsedHours / 24)} 天前`;
     };
     const formatClock = (value) => {
       if (!value) return '';
@@ -292,6 +425,13 @@
       const rightTime = Date.parse(right?.occurred_at || '') || 0;
       if (leftTime !== rightTime) return rightTime - leftTime;
       return String(right?.id || '').localeCompare(String(left?.id || ''));
+    }
+    function shanghaiDateKey(value) {
+      const date = value instanceof Date ? value : new Date(value);
+      if (Number.isNaN(date.getTime())) return '';
+      const parts = new Intl.DateTimeFormat('en-US', { timeZone:'Asia/Shanghai', year:'numeric', month:'2-digit', day:'2-digit' }).formatToParts(date);
+      const values = Object.fromEntries(parts.filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));
+      return values.year + '-' + values.month + '-' + values.day;
     }
     function renderRuntimeLog(log) {
       const status = formatRuntimeStatus(log.status);
@@ -327,14 +467,44 @@
     const unsafeMethods = new Set(['POST', 'PATCH', 'PUT', 'DELETE']);
     function csrfToken() {
       const match = document.cookie.match(/(?:^|;\s*)workbench_csrf=([^;]*)/);
-      return match ? decodeURIComponent(match[1]) : '';
+      if (!match) return '';
+      try {
+        return decodeURIComponent(match[1]);
+      } catch (_) {
+        return '';
+      }
+    }
+    function loginURL() {
+      const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      return `/login?next=${encodeURIComponent(current || '/')}`;
+    }
+    function isLoginRequired(response, data) {
+      if (response.status !== 401) return false;
+      return data?.code === 'login_required'
+        || data?.error_code === 'login_required'
+        || data?.reason === 'login_required'
+        || data?.login_required === true
+        || data?.error === 'login_required'
+        || data?.error === '需要工作台管理员认证';
+    }
+    let loginRedirecting = false;
+    function redirectToLogin() {
+      if (loginRedirecting) return;
+      loginRedirecting = true;
+      window.location.replace(loginURL());
     }
     async function request(url, options = {}) {
       const method = (options.method || 'GET').toUpperCase();
       const headers = { ...(options.headers || {}) };
       if (unsafeMethods.has(method)) headers['X-CSRF-Token'] = csrfToken();
-      const response = await fetch(url, { ...options, method, headers });
+      const response = await fetch(url, { ...options, method, headers, credentials: 'same-origin' });
       const data = await response.json().catch(() => ({}));
+      if (isLoginRequired(response, data)) {
+        redirectToLogin();
+        const error = new Error('登录会话已失效，请重新登录');
+        error.loginRequired = true;
+        throw error;
+      }
       if (!response.ok) throw new Error(data.error || '请求失败');
       return data;
     }
@@ -356,6 +526,22 @@
     function activityData(account) {
       return account.activity_result || activitySnapshotData(account);
     }
+    function drawHistorySnapshotData(account) {
+      const snapshot = account.draw_history_snapshot;
+      if (!snapshot || !snapshot.data || typeof snapshot.data !== 'object') return null;
+      return { ...snapshot.data, queried_at: snapshot.queried_at || snapshot.data.queried_at };
+    }
+    function drawHistoryData(account) {
+      return account.draw_history_result || drawHistorySnapshotData(account);
+    }
+    function tokenUsageSnapshotData(account) {
+      const snapshot = account.token_usage_snapshot;
+      if (!snapshot || !snapshot.data || typeof snapshot.data !== 'object') return null;
+      return { ...snapshot.data, queried_at: snapshot.queried_at || snapshot.data.queried_at };
+    }
+    function tokenUsageData(account) {
+      return account.token_usage_result || tokenUsageSnapshotData(account);
+    }
     function hydrateAccount(account) {
       return {
         ...account,
@@ -366,14 +552,20 @@
         querying_draw: false,
         querying_activity: false,
         balancing: false,
+        querying_token_usage: false,
         saving_schedule: false,
         balance_result: null,
         balance_error: '',
+        token_usage_result: null,
+        token_usage_error: '',
         draw_schedules: [],
         purchasing_draw: false,
         unlocking_pass: false,
         activity_result: null,
         activity_error: '',
+        draw_history_result: null,
+        draw_history_error: '',
+        querying_draw_history: false,
         auto_draw: null,
         auto_draw_error: '',
         footer_message: '',
@@ -425,12 +617,14 @@
       const items = entries.map((entry) => {
         const plan = plansBySchedule.get(entry.id);
         const display = plan ? autoDrawPlanDisplay(plan) : { tone: 'pending', label: '计划待生成' };
-        return `<li class="auto-draw__step auto-draw__step--${display.tone}"><div class="auto-draw__dot" aria-hidden="true"></div><div class="auto-draw__time">${escapeHTML(entry.label || formatScheduleLabel(entry))}</div><div class="auto-draw__status">${escapeHTML(display.label)}<button class="action action--compact" type="button" data-schedule-remove="${escapeHTML(account.id)}" data-schedule-id="${escapeHTML(entry.id)}">移除</button></div></li>`;
+        const mode = entry.kind === 'random' ? '时段随机' : '固定时间';
+        const cadence = entry.kind === 'random' ? '时段内每天一次' : '每天一次';
+        const statusClass = display.tone === 'pending' ? ' plan-row__status--pending' : '';
+        return `<li class="plan-row"><div class="plan-row__main"><strong class="plan-row__time">${escapeHTML(entry.label || formatScheduleLabel(entry))}</strong><span class="plan-row__mode">${mode} · ${cadence}</span></div><span class="plan-row__status${statusClass}">${escapeHTML(display.label)}</span><button class="action action--compact" type="button" data-schedule-remove="${escapeHTML(account.id)}" data-schedule-id="${escapeHTML(entry.id)}">移除</button></li>`;
       }).join('');
-      const list = entries.length ? `<ol class="auto-draw__timeline">${items}</ol>` : '<p class="auto-draw__empty">尚未配置定时抽奖。添加固定时间或时段随机计划后，每天各执行一次。</p>';
-      const form = `<div class="auto-draw__form"><select class="sched-kind" aria-label="计划类型"><option value="fixed">固定时间</option><option value="random">时段随机</option></select><input class="sched-start" type="time" aria-label="开始时间" required><input class="sched-end" type="time" aria-label="结束时间（时段随机）"><button class="action action--compact" type="button" data-schedule-add="${escapeHTML(account.id)}" ${account.saving_schedule ? 'disabled' : ''}>${account.saving_schedule ? '保存中' : '添加计划'}</button></div>`;
+      const list = entries.length ? `<ul class="plan-list">${items}</ul>` : '<p class="auto-draw__empty">暂无计划，请点击右上角设置自动抽奖。</p>';
       const error = account.auto_draw_error ? `<div class="auto-draw__error">计划更新失败：${escapeHTML(account.auto_draw_error)}</div>` : '';
-      return `<section class="auto-draw" aria-label="定时抽奖计划"><div class="auto-draw__head"><h3 class="auto-draw__title">今日定时抽奖</h3>${entries.length ? `<span class="auto-draw__summary">已执行 ${handled}/${entries.length}</span>` : ''}</div>${list}${form}${error}</section>`;
+      return `<section class="auto-draw" aria-label="自动抽奖计划">${entries.length ? `<div class="auto-draw__head"><span class="auto-draw__summary">今日已完成 ${handled}/${entries.length}</span></div>` : ''}${list}${error}</section>`;
     }
     function usageData(account) {
       if (account.balance_result) return account.balance_result;
@@ -438,70 +632,155 @@
       if (!snapshot || !snapshot.data || typeof snapshot.data !== 'object') return null;
       return { ...snapshot.data, queried_at: snapshot.queried_at || snapshot.data.queried_at };
     }
+    function renderMetricHeader(title, refreshLabel, attribute, accountID, disabled, meta = '') {
+      return `<div class="metric-group__head"><h3 class="metric-group__title">${escapeHTML(title)}</h3>${meta ? `<span class="metric-group__meta">${escapeHTML(meta)}</span>` : ''}<button class="metric-group__refresh-button" type="button" data-${attribute}="${escapeHTML(accountID)}" aria-label="${escapeHTML(refreshLabel)}" title="${escapeHTML(refreshLabel)}" ${disabled ? 'disabled' : ''}>${icons.refresh}</button></div>`;
+    }
+    function renderMetricEmpty(message, error = false) {
+      return `<div class="metric-group__empty${error ? ' metric-group__empty--error' : ''}">${message}</div>`;
+    }
+    function renderMetricPair(leftValue, leftLabel, rightValue, rightLabel, single = false) {
+      if (single) return `<div class="metric-pair"><div class="metric-pair__item"><strong class="metric-pair__value">${leftValue}</strong><span class="metric-pair__label">${escapeHTML(leftLabel)}</span></div></div>`;
+      return `<div class="metric-pair"><div class="metric-pair__item"><strong class="metric-pair__value">${leftValue}</strong><span class="metric-pair__label">${escapeHTML(leftLabel)}</span></div><span class="metric-pair__divider">/</span><div class="metric-pair__item"><strong class="metric-pair__value">${rightValue}</strong><span class="metric-pair__label">${escapeHTML(rightLabel)}</span></div></div>`;
+    }
+    function renderMetricSubline(label, value) {
+      return `<div class="metric-subline"><span class="metric-subline__label">${escapeHTML(label)}</span><strong class="metric-subline__value">${value}</strong></div>`;
+    }
     function renderBalance(account) {
       const usage = usageData(account);
-      const toolbar = `<div class="activity-toolbar"><button class="action action--compact" type="button" data-balance="${escapeHTML(account.id)}" ${account.balancing ? 'disabled' : ''}>${icons.refresh}${account.balancing ? '刷新中' : '刷新余额'}</button></div>`;
+      const header = renderMetricHeader('账户余额', '刷新账户余额', 'balance', account.id, account.balancing, formatRelativeTime(usage?.queried_at));
       if (!usage) {
         const emptyText = account.balance_error ? `余额查询失败：${escapeHTML(account.balance_error)}` : '尚未查询余额。';
-        const emptyClass = account.balance_error ? ' account__status--error' : '';
-        return `<section class="balance-section"><div class="section-head"><h3 class="section-title">账户余额</h3>${toolbar}</div><div class="draw-empty${emptyClass}">${emptyText}</div></section>`;
+        return `<section class="metric-group balance-section">${header}${renderMetricEmpty(emptyText, !!account.balance_error)}</section>`;
       }
       const note = usage.quota_conversion_available === false
         ? `<div class="activity-note activity-note--error">${escapeHTML(usage.quota_conversion_error || '无法获取美元换算配置')}</div>`
         : '';
-      const meta = usage.queried_at ? `更新于 ${formatTime(usage.queried_at)}` : '';
-      return `<section class="balance-section"><div class="section-head"><h3 class="section-title">账户余额</h3>${toolbar}</div>${meta ? `<div class="section-meta">${escapeHTML(meta)}</div>` : ''}<div class="metrics"><div class="metric"><div class="metric__label">剩余额度</div><div class="metric__value">${formatMoney(usage.quota_usd)}</div></div><div class="metric"><div class="metric__label">已用额度</div><div class="metric__value">${formatMoney(usage.used_quota_usd)}</div></div><div class="metric"><div class="metric__label">请求次数</div><div class="metric__value">${toNumber(usage.request_count)}</div></div></div>${note}</section>`;
+      return `<section class="metric-group balance-section">${header}${renderMetricPair(escapeHTML(formatMoney(usage.used_quota_usd)), '已用', escapeHTML(formatMoney(usage.quota_usd)), '剩余')}${renderMetricSubline('请求次数', `${formatCount(usage.request_count)} 次`)}${note}</section>`;
+    }
+    function formatCount(value) {
+      const number = Number(value);
+      return Number.isFinite(number) ? new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 }).format(number) : '—';
+    }
+    function formatTokenCount(value) {
+      const number = Number(value);
+      if (!Number.isFinite(number)) return '—';
+      if (number >= 1e9) return `${(number / 1e9).toFixed(2).replace(/\.?0+$/, '')}B`;
+      if (number >= 1e6) return `${(number / 1e6).toFixed(2).replace(/\.?0+$/, '')}M`;
+      return formatCount(number);
+    }
+    function renderTokenUsage(account) {
+      const usage = tokenUsageData(account);
+      const refreshing = account.querying_token_usage;
+      const header = renderMetricHeader('今日消耗', '刷新今日消耗', 'token-usage', account.id, refreshing, formatRelativeTime(usage?.queried_at));
+      if (!usage) {
+        const emptyText = account.token_usage_error ? `今日消耗查询失败：${escapeHTML(account.token_usage_error)}` : '尚未查询今日消耗。';
+        return `<section class="metric-group token-usage-section">${header}${renderMetricEmpty(emptyText, !!account.token_usage_error)}</section>`;
+      }
+      const note = usage.quota_conversion_available === false
+        ? `<div class="activity-note activity-note--error">${escapeHTML(usage.quota_conversion_error || '无法获取美元换算配置')}</div>`
+        : '';
+      return `<section class="metric-group token-usage-section">${header}${renderMetricPair(formatTokenCount(usage.total_tokens), 'Token', escapeHTML(formatMoney(usage.consumed_quota_usd)), '消耗额度')}${renderMetricSubline('调用次数', `${formatCount(usage.call_count)} 次`)}${note}</section>`;
     }
     function renderDrawCount(account) {
       const result = account.draw_result || drawSnapshotData(account);
-      if (account.draw_error) return `<section class="draw-section"><div class="section-head"><h3 class="section-title">抽奖次数</h3></div><div class="draw-empty account__status--error">查询失败：${escapeHTML(account.draw_error)}</div></section>`;
-      if (!result) return '<section class="draw-section"><div class="section-head"><h3 class="section-title">抽奖次数</h3></div><div class="draw-empty">尚未查询。</div></section>';
+      const header = renderMetricHeader('抽奖次数', '刷新抽奖次数', 'draw-count', account.id, account.querying_draw, result?.queried_at ? (result.unlocked ? '已解锁' : formatRelativeTime(result.queried_at)) : '');
+      if (account.draw_error) return `<section class="metric-group draw-section">${header}${renderMetricEmpty(`查询失败：${escapeHTML(account.draw_error)}`, true)}</section>`;
+      if (!result) return `<section class="metric-group draw-section">${header}${renderMetricEmpty('尚未查询。')}</section>`;
       const remaining = toNumber(result.remaining);
       const locked = toNumber(result.locked_remaining);
       const used = toNumber(result.daily_used);
       const limit = toNumber(result.free_limit);
-      const meta = [result.unlocked ? '今日已解锁' : '', result.queried_at ? `更新于 ${formatTime(result.queried_at)}` : ''].filter(Boolean).join(' · ');
-      return `<section class="draw-section"><div class="section-head"><h3 class="section-title">抽奖次数</h3>${meta ? `<span class="section-meta">${escapeHTML(meta)}</span>` : ''}</div><div class="metrics"><div class="metric"><div class="metric__label">当前可抽</div><div class="metric__value">${remaining}<span class="metric__unit">次</span></div></div><div class="metric"><div class="metric__label">已锁定</div><div class="metric__value">${locked}<span class="metric__unit">次</span></div></div><div class="metric"><div class="metric__label">今日已用</div><div class="metric__value">${used}/${limit}<span class="metric__unit">次</span></div></div></div></section>`;
+      return `<section class="metric-group draw-section">${header}${renderMetricPair(`${remaining}`, '可抽', `${locked}`, '已锁定')}${renderMetricSubline('今日已用', `${used} / ${limit} 次`)}</section>`;
     }
     function purchaseBusy(account, activity) {
       return account.querying_activity || account.purchasing_draw || account.unlocking_pass || toNumber(activity?.purchase_pending) > 0 || toNumber(activity?.purchase_unknown) > 0;
     }
     function renderActivity(account) {
+      /* refresh activity */
       const activity = activityData(account);
       const error = account.activity_error;
       const refreshing = account.querying_activity;
-      const toolbar = `<div class="activity-toolbar"><button class="action action--compact" type="button" data-activity="${escapeHTML(account.id)}" ${refreshing ? 'disabled' : ''}>${icons.refresh}${refreshing ? '刷新中' : '刷新活动'}</button></div>`;
+      const header = renderMetricHeader('活动状态', '刷新活动', 'activity', account.id, refreshing, formatRelativeTime(activity?.queried_at));
       if (!activity) {
         const emptyText = error ? `活动刷新失败：${escapeHTML(error)}` : '尚未读取活动。';
-        const emptyClass = error ? ' account__status--error' : '';
-        return `<section class="activity-section"><div class="section-head"><h3 class="section-title">活动状态</h3>${toolbar}</div><div class="draw-empty${emptyClass}">${emptyText}</div></section>`;
+        return `<section class="metric-group activity-section">${header}${renderMetricEmpty(emptyText, !!error)}</section>`;
       }
       const reached = toNumber(activity.spend_tier_reached);
       const total = toNumber(activity.spend_tier_total);
       const points = toNumber(activity.lucky_points);
       const maxPoints = toNumber(activity.lucky_max_points);
-      const bonusDraws = toNumber(activity.spend_bonus_draws);
-      const nextRemaining = activity.next_spend_remaining_usd ? formatMoney(activity.next_spend_remaining_usd) : '';
-      const helper = activity.next_spend_remaining_usd != null
-        ? `距下一档还需 ${nextRemaining} · 今日累计加抽 ${bonusDraws} 次`
-        : `全部档位已完成 · 今日累计加抽 ${bonusDraws} 次`;
-      const meta = [activity.queried_at ? `更新于 ${formatTime(activity.queried_at)}` : '', toNumber(activity.purchase_pending) > 0 ? 'purchase_pending' : '', toNumber(activity.purchase_unknown) > 0 ? 'purchase_unknown' : ''].filter(Boolean).join(' · ');
-      const drawPrice = activity.draw_purchase_cost_usd;
-      const passPrice = activity.pass_unlock_cost_usd;
-      const blocked = purchaseBusy(account, activity);
-      const drawDisabled = blocked || drawPrice == null;
-      const passUnlocked = !!activity.pass_unlocked;
-      const passDisabled = blocked || passUnlocked || passPrice == null;
-      const note = error ? `<div class="activity-note activity-note--error">最近刷新失败：${escapeHTML(error)}</div>` : '';
-      const pendingNote = toNumber(activity.purchase_pending) > 0 || toNumber(activity.purchase_unknown) > 0
-        ? `<div class="activity-note">购买结果待确认，暂不允许重复提交。</div>`
-        : '';
-      return `<section class="activity-section"><div class="section-head"><h3 class="section-title">活动状态</h3>${toolbar}</div>${meta ? `<div class="section-meta">${escapeHTML(meta)}</div>` : ''}<div class="metrics"><div class="metric"><div class="metric__label">今日消耗</div><div class="metric__value">${formatUSD(activity.today_spend_usd)}</div></div><div class="metric"><div class="metric__label">消耗激励</div><div class="metric__value">${reached}/${total}<span class="metric__unit">档</span></div></div><div class="metric"><div class="metric__label">幸运积分</div><div class="metric__value">${points}/${maxPoints}</div></div></div><div class="activity-note">${escapeHTML(helper)}</div>${note}${pendingNote}<div class="purchase-actions"><button class="action action--purchase" type="button" data-purchase-draw="${escapeHTML(account.id)}" ${drawDisabled ? 'disabled' : ''}>${icons.draw}购买 1 抽 · ${formatUSD(drawPrice)}</button><button class="action action--purchase${passUnlocked ? ' action--done' : ''}" type="button" data-unlock-pass="${escapeHTML(account.id)}" ${passDisabled ? 'disabled' : ''}>${icons.claim}${passUnlocked ? '今日通行证已购买' : `购买通行证 · ${formatUSD(passPrice)}`}</button></div></section>`;
+      return `<section class="metric-group metric-group--ok activity-section">${header}${renderMetricPair(escapeHTML(formatUSD(activity.today_spend_usd)), '今日消耗', `${reached}/${total}`, '激励档位')}${renderMetricSubline('幸运积分', `${points} / ${maxPoints}`)}</section>`;
     }
     function renderSubscription(subscription) {
       const quota = subscription.unlimited ? '不限额' : formatQuota(subscription.remaining_usd);
       const meta = subscription.end_time ? `到期：${formatTime(subscription.end_time)}` : '未提供到期时间';
-      return `<div class="subscription"><div><div class="subscription__plan">${escapeHTML(subscription.plan_title || '未命名订阅')}</div><div class="subscription__meta">${escapeHTML(meta)}</div></div><div class="subscription__quota">${escapeHTML(quota)}<div class="subscription__meta">${subscription.unlimited ? '状态' : '剩余'}</div></div></div>`;
+      return `<div class="subscription-item"><div><div class="subscription-item__name">${escapeHTML(subscription.plan_title || '未命名订阅')}</div><div class="subscription-item__meta">${escapeHTML(meta)}</div></div><div class="subscription-item__quota">${escapeHTML(quota)}<span>${subscription.unlimited ? '状态' : '剩余额度'}</span></div></div>`;
+    }
+    function drawHistoryStatus(record) {
+      const resultStatus = String(record.status || '').trim().toLowerCase();
+      const rewardStatus = String(record.fulfillment_status || '').trim().toLowerCase();
+      const expiresAt = Date.parse(record.expires_at || '');
+      const expired = rewardStatus === 'expired' || (Number.isFinite(expiresAt) && expiresAt <= Date.now());
+      if (resultStatus === 'fulfilled') {
+        if (['failed', 'error'].includes(rewardStatus)) return { label: '已中奖 · 发放失败', tone: 'error' };
+        if (expired) return { label: '已中奖 · 已过期', tone: 'muted' };
+        if (rewardStatus === 'active') return { label: '已中奖 · 生效中', tone: 'ok' };
+        return { label: '已中奖', tone: 'ok' };
+      }
+      if (['failed', 'error'].includes(resultStatus)) return { label: '失败', tone: 'error' };
+      if (['pending', 'processing'].includes(resultStatus)) return { label: '待确认', tone: 'muted' };
+      if (resultStatus === 'skipped') return { label: '已跳过', tone: 'muted' };
+      if (rewardStatus === 'active') return { label: '奖励生效中', tone: 'ok' };
+      return { label: record.status || '待确认', tone: 'muted' };
+    }
+    function drawHistoryRecords(account) {
+      const today = shanghaiDateKey(new Date());
+      const report = drawHistoryData(account);
+      const platformRecords = Array.isArray(report?.history) ? report.history.map((record) => ({ ...record, source: '平台', created_at: record.created_at || record.createdAt })) : [];
+      const localRecords = state.runtimeLogs
+        .filter((log) => log.account_id === account.id && shanghaiDateKey(log.occurred_at) === today)
+        .map((log) => ({ ...log, source: log.window_id === 'manual' ? '手动' : '定时', created_at: log.occurred_at, prize_label: log.prize_label, fulfillment_message: log.message }));
+      const merged = platformRecords.slice();
+      localRecords.forEach((local) => {
+        const localTime = Date.parse(local.created_at || '') || 0;
+        const duplicate = merged.some((remote) => {
+          const remoteTime = Date.parse(remote.created_at || '') || 0;
+          const remotePrize = remote.prize_short_label || remote.prize_label || '';
+          const localPrize = local.prize_short_label || local.prize_label || '';
+          return localPrize && remotePrize === localPrize && Math.abs(remoteTime - localTime) <= 120000;
+        });
+        if (!duplicate) merged.push(local);
+      });
+      return merged.filter((record) => shanghaiDateKey(record.created_at) === today).sort((left, right) => (Date.parse(right.created_at || '') || 0) - (Date.parse(left.created_at || '') || 0));
+    }
+    function formatValidity(hours) {
+      const value = toNumber(hours);
+      if (!value) return '';
+      return value % 24 === 0 ? `${value / 24} 天` : `${value} 小时`;
+    }
+    function drawHistoryExpiry(value) {
+      return value ? `有效至 ${formatTime(value)}` : '';
+    }
+    function renderDrawHistory(account) {
+      const records = drawHistoryRecords(account);
+      const history = drawHistoryData(account);
+      const header = '<div class="subscription-column-head"><h3 class="details__title">今日抽奖记录 · ' + records.length + '</h3><button class="subscription-refresh" type="button" data-draw-history-refresh="' + escapeHTML(account.id) + '" aria-label="刷新抽奖记录" title="刷新抽奖记录"' + (account.querying_draw_history ? ' disabled' : '') + '>' + icons.refresh + '<span>' + (account.querying_draw_history ? '刷新中' : '刷新') + '</span></button></div>';
+      if (account.draw_history_error && !history && !records.length) return '<section class="details-column">' + header + '<p class="auto-draw__empty">抽奖记录刷新失败：' + escapeHTML(account.draw_history_error) + '</p></section>';
+      if (!records.length) return '<section class="details-column">' + header + '<p class="auto-draw__empty">暂无今日抽奖记录。</p></section>';
+      const items = records.map((log) => {
+        const status = log.source === '平台' ? drawHistoryStatus(log) : formatRuntimeStatus(log.status);
+        const statusClass = status.tone === 'ok' ? ' draw-history-item__status--ok' : status.tone === 'error' ? ' draw-history-item__status--error' : '';
+        const source = log.source || '平台';
+        const title = log.prize_short_label || log.prize_label || '抽奖结果';
+        const rewardMeta = [];
+        if (log.quota_delta_usd && typeof log.quota_delta_usd === 'object') rewardMeta.push(`+${formatMoney(log.quota_delta_usd)}`);
+        const validity = formatValidity(log.prize_validity_hours);
+        if (validity) rewardMeta.push(`有效 ${validity}`);
+        const expiry = drawHistoryExpiry(log.expires_at);
+        const meta = [expiry].filter(Boolean);
+        return '<article class="draw-history-item"><div class="draw-history-item__head"><span class="draw-history-item__source">' + escapeHTML(source) + '</span><strong class="draw-history-item__title" title="' + escapeHTML(title) + '">' + escapeHTML(title) + '</strong><time class="draw-history-item__time">' + escapeHTML(formatClock(log.created_at) || '时间未知') + '</time><span class="draw-history-item__status' + statusClass + '">' + escapeHTML(status.label) + '</span></div>' + (rewardMeta.length ? '<div class="draw-history-item__detail">' + escapeHTML(rewardMeta.join(' · ')) + '</div>' : '') + (meta.length ? '<div class="draw-history-item__meta">' + meta.map((item) => '<span>' + escapeHTML(item) + '</span>').join('') + '</div>' : '') + '</article>';
+      }).join('');
+      return '<section class="details-column">' + header + '<div class="draw-history-list">' + items + '</div></section>';
     }
     function authBadge(account) {
       const health = String(account.auth_health || 'unknown');
@@ -560,18 +839,51 @@
       }
       return defaultFooter(account, result, error);
     }
+    function renderPurchaseActions(account) {
+      const activity = activityData(account);
+      if (!activity) return '';
+      const blocked = purchaseBusy(account, activity);
+      const drawPrice = activity.draw_purchase_cost_usd;
+      const passPrice = activity.pass_unlock_cost_usd;
+      const drawDisabled = blocked || drawPrice == null;
+      const passUnlocked = !!activity.pass_unlocked;
+      const passDisabled = blocked || passUnlocked || passPrice == null;
+      const pending = toNumber(activity.purchase_pending) > 0 || toNumber(activity.purchase_unknown) > 0;
+      const pendingNote = pending ? '<div class="activity-note">购买结果待确认，暂不允许重复提交。</div>' : '';
+      return `<div class="account__purchase-row"><button class="action action--purchase" type="button" data-purchase-draw="${escapeHTML(account.id)}" ${drawDisabled ? 'disabled' : ''}>${icons.draw}购买 1 抽 · ${escapeHTML(formatUSD(drawPrice))}</button><button class="action action--purchase${passUnlocked ? ' action--done' : ''}" type="button" data-unlock-pass="${escapeHTML(account.id)}" ${passDisabled ? 'disabled' : ''}>${icons.claim}${passUnlocked ? '今日通行证已购买' : `购买通行证 · ${escapeHTML(formatUSD(passPrice))}`}</button></div>${pendingNote}`;
+    }
+    function renderStatusLine(account) {
+      const schedules = scheduleEntries(account);
+      const plans = Array.isArray(account.auto_draw?.plans) ? account.auto_draw.plans : [];
+      const next = plans.filter((plan) => !['completed', 'skipped', 'failed'].includes(String(plan.status || '').toLowerCase())).sort((a, b) => (Date.parse(a.planned_at || '') || Infinity) - (Date.parse(b.planned_at || '') || Infinity))[0];
+      const nextText = next?.planned_at ? ` · 下一次 ${formatClock(next.planned_at)}` : '';
+      const scheduleText = schedules.length ? `已配置 ${schedules.length} 个计划` : '尚未配置计划';
+      const activity = activityData(account);
+      const bonusDraws = toNumber(activity?.spend_bonus_draws);
+      const nextRemaining = activity?.next_spend_remaining_usd != null ? formatMoney(activity.next_spend_remaining_usd) : '';
+      const activityHint = activity
+        ? (activity.next_spend_remaining_usd != null ? ` · 距下一档还需 ${nextRemaining}` : ` · 全部档位已完成`) + ` · 今日累计加抽 ${bonusDraws} 次`
+        : '';
+      const reward = account.checkin_quota_awarded;
+      const rewardMarker = account.checkin_status === 'completed' && reward?.state === 'confirmed' ? `<span class="status-line__reward">今日签到 +${escapeHTML(formatAward(reward))}</span>` : '';
+      return `<div class="status-line"><span class="status-line__dot" aria-hidden="true"></span><span class="status-line__text">自动抽奖：${scheduleText}${nextText}${activityHint}</span>${rewardMarker}<span class="status-line__link">运行日志</span></div>`;
+    }
     function renderAccount(account) {
       const result = account.result || snapshotData(account);
       const subscriptions = Array.isArray(result?.subscriptions) ? result.subscriptions : [];
       const error = result?.query_error;
       const checkedIn = account.checkin_status === 'completed';
       const claimDone = account.claim_status === 'completed';
-      let body = renderBalance(account) + renderDrawCount(account) + renderActivity(account) + '<section class="subscriptions"><div class="section-head"><h3 class="section-title">当前有效订阅</h3></div>';
-      if (error) body += '<p class="empty">本次未取得订阅数据。</p>';
-      else if (!result) body += '<p class="empty">尚未查询订阅。</p>';
-      else if (!subscriptions.length) body += '<p class="empty">当前无有效订阅。</p>';
-      else body += subscriptions.map(renderSubscription).join('');
-      body += '</section>';
+      const refreshText = account.refreshing ? '刷新中' : '刷新订阅';
+      const subscriptionMeta = `${subscriptions.length ? `当前有效订阅 · ${subscriptions.length}` : '当前有效订阅'}`;
+      let subscriptionBody = '';
+      if (error) subscriptionBody = '<p class="empty">本次未取得订阅数据。</p>';
+      else if (!result) subscriptionBody = '<p class="empty">尚未查询订阅。</p>';
+      else if (!subscriptions.length) subscriptionBody = '<p class="empty">当前无有效订阅。</p>';
+      else subscriptionBody = subscriptions.map(renderSubscription).join('');
+      const details = `<div class="details details-split"><section class="details-column"><div class="plan-column-head"><h3 class="details__title">自动抽奖计划</h3><button class="plan-settings" type="button" data-focus-schedule="${escapeHTML(account.id)}" aria-label="设置自动抽奖" title="设置自动抽奖">${icons.edit}设置自动抽奖</button></div>${renderAutoDrawSchedule(account)}</section>${renderDrawHistory(account)}<section class="details-column"><div class="subscription-column-head"><h3 class="details__title">${escapeHTML(subscriptionMeta)}</h3><button class="subscription-refresh" type="button" data-refresh="${escapeHTML(account.id)}" aria-label="刷新订阅" title="刷新订阅" ${account.refreshing ? 'disabled' : ''}>${icons.refresh}<span>${refreshText}</span></button></div><div class="subscription-list">${subscriptionBody}</div></section></div>`;
+      const metrics = `<div class="account__body"><div class="metrics-groups">${renderBalance(account)}${renderTokenUsage(account)}${renderDrawCount(account)}${renderActivity(account)}</div></div>`;
+      const lower = `${renderPurchaseActions(account)}${renderStatusLine(account)}${details}`;
       const footer = footerState(account, result, error);
       const footerClass = footer.tone === 'error' ? ' account__status--error' : footer.tone === 'ok' ? ' account__status--ok' : '';
       const footerIcon = footer.tone === 'error' ? icons.error : footer.tone === 'ok' ? icons.success : icons.info;
@@ -580,15 +892,13 @@
       const claimText = account.claiming ? '领取中' : claimDone ? '今日已领取' : account.claim_status === 'unknown' ? '核对结果' : '领取次数';
       const drawText = account.drawing ? '抽奖中' : '手动抽奖';
       const drawCountText = account.querying_draw ? '刷新中' : '刷新次数';
-      const refreshText = account.refreshing ? '刷新中' : '刷新订阅';
-      const autoDrawSchedule = renderAutoDrawSchedule(account);
-      return `<article class="account" data-account-id="${escapeHTML(account.id)}"><div class="account__identity"><div class="account__eyebrow"><span class="account__dot"></span>账号 ${escapeHTML(accountCode)}</div><h2 class="account__name">${escapeHTML(account.label || account.id)}</h2><div class="account__user">${escapeHTML(account.masked_login_name || '')}<span class="auth-badge auth-badge--${escapeHTML(authTone(account))}">${escapeHTML(authBadge(account))}</span></div></div><div class="account__actions"><button class="action${checkedIn ? ' action--done' : ''}" type="button" aria-label="${checkedIn ? '今日已签到' : '执行签到'}" data-checkin="${escapeHTML(account.id)}" ${checkedIn || account.checking_in ? 'disabled' : ''}>${icons.checkin}${checkinText}</button><button class="action${claimDone ? ' action--done' : ''}" type="button" aria-label="领取每日抽奖次数" data-claim="${escapeHTML(account.id)}" ${claimDone || account.claiming ? 'disabled' : ''}>${icons.claim}${claimText}</button><button class="action action--primary" type="button" aria-label="手动抽奖" data-draw="${escapeHTML(account.id)}" ${account.drawing ? 'disabled' : ''}>${icons.draw}${drawText}</button><button class="action" type="button" aria-label="刷新抽奖次数" data-draw-count="${escapeHTML(account.id)}" ${account.querying_draw ? 'disabled' : ''}>${icons.refresh}${drawCountText}</button><button class="action" type="button" aria-label="刷新订阅" data-refresh="${escapeHTML(account.id)}" ${account.refreshing ? 'disabled' : ''}>${icons.subscriptions}${refreshText}</button></div><div class="account__manage"><button class="action action--compact" type="button" data-edit-account="${escapeHTML(account.id)}">${icons.edit}编辑</button><button class="action action--compact" type="button" data-validate-auth="${escapeHTML(account.id)}">${icons.info}检查认证</button><button class="action action--compact" type="button" data-reauthenticate="${escapeHTML(account.id)}">${icons.key}重新认证</button><button class="action action--compact" type="button" data-session-preview="${escapeHTML(account.id)}">${icons.info}会话清理</button><button class="action action--compact action--danger" type="button" data-delete-account="${escapeHTML(account.id)}">${icons.error}删除</button></div>${autoDrawSchedule}<div class="account__body">${body}</div><div class="account__footer account__status${footerClass}" role="status" aria-live="polite" aria-atomic="true" tabindex="-1" data-status-account="${escapeHTML(account.id)}">${footerIcon}<span>${escapeHTML(footer.message)}</span></div></article>`;
+      return `<article class="account" data-account-id="${escapeHTML(account.id)}"><div class="account__identity"><div class="account__eyebrow"><span class="account__dot"></span>账号 ${escapeHTML(accountCode)}</div><h2 class="account__name">${escapeHTML(account.label || account.id)}</h2><div class="account__user">${escapeHTML(account.masked_login_name || '')}<span class="auth-badge auth-badge--${escapeHTML(authTone(account))}">${escapeHTML(authBadge(account))}</span></div></div>${metrics}<div class="account__actions"><button class="action action--primary" type="button" aria-label="手动抽奖" data-draw="${escapeHTML(account.id)}" ${account.drawing ? 'disabled' : ''}>${icons.draw}${drawText}</button><button class="action${checkedIn ? ' action--done' : ''}" type="button" aria-label="${checkedIn ? '今日已签到' : '执行签到'}" data-checkin="${escapeHTML(account.id)}" ${checkedIn || account.checking_in ? 'disabled' : ''}>${icons.checkin}${checkinText}</button><button class="action" type="button" aria-label="领取每日抽奖次数" data-claim="${escapeHTML(account.id)}" ${claimDone || account.claiming ? 'disabled' : ''}>${icons.claim}${claimText}</button><button class="action action--compact" type="button" data-edit-account="${escapeHTML(account.id)}">${icons.edit}编辑</button><button class="action action--compact" type="button" data-validate-auth="${escapeHTML(account.id)}">${icons.info}检查认证</button><button class="action action--compact" type="button" data-reauthenticate="${escapeHTML(account.id)}">${icons.key}重新认证</button><button class="action action--compact" type="button" data-session-preview="${escapeHTML(account.id)}">${icons.info}会话管理</button><button class="action action--compact action--danger" type="button" data-delete-account="${escapeHTML(account.id)}">${icons.error}删除</button></div>${lower}<div class="account__footer account__status${footerClass}" role="status" aria-live="polite" aria-atomic="true" tabindex="-1" data-status-account="${escapeHTML(account.id)}">${footerIcon}<span>${escapeHTML(footer.message)}</span></div></article>`;
     }
-    const focusDataKeys = ['refresh', 'checkin', 'claim', 'draw', 'drawCount', 'activity', 'purchaseDraw', 'unlockPass'];
+    const focusDataKeys = ['refresh', 'checkin', 'claim', 'draw', 'drawCount', 'activity', 'balance', 'tokenUsage', 'purchaseDraw', 'unlockPass'];
     function currentFocusTarget() {
       const active = document.activeElement;
       if (!active || !root.contains(active)) return null;
-      const button = active.closest('[data-refresh],[data-checkin],[data-claim],[data-draw],[data-draw-count],[data-activity],[data-purchase-draw],[data-unlock-pass]');
+      const button = active.closest('[data-refresh],[data-checkin],[data-claim],[data-draw],[data-draw-count],[data-activity],[data-balance],[data-token-usage],[data-purchase-draw],[data-unlock-pass]');
       if (button) {
         const key = focusDataKeys.find((name) => button.dataset[name]);
         if (key) return { type: 'button', key, accountID: button.dataset[key] };
@@ -628,11 +938,9 @@
       const active = findAccount(state.activeAccountId) || state.accounts[0];
       state.activeAccountId = active.id;
       root.innerHTML = renderAccount(active);
-      const card = root.querySelector('.account');
-      if (card && active) card.querySelector('.account__identity').insertAdjacentHTML('beforeend', renderCheckinReward(active));
       restoreFocus(focusTarget);
     }
-    async function loadRuntimeLogs() {
+    async function loadRuntimeLogs(renderAccount = false) {
       if (state.logsLoading) return;
       state.logsLoading = true;
       state.logsError = '';
@@ -645,7 +953,11 @@
       } finally {
         state.logsLoading = false;
         renderRuntimeLogs();
+        if (renderAccount) render();
       }
+    }
+    async function loadDrawHistories() {
+      await Promise.all(state.accounts.map((account) => refreshDrawHistoryOnly(account)));
     }
     async function refreshAutoDrawStatus() {
       if (state.autoDrawLoading) return;
@@ -696,6 +1008,21 @@
       render();
       await refreshDrawCountOnly(account);
       render();
+    }
+    async function refreshDrawHistoryOnly(account) {
+      if (!account || account.querying_draw_history) return;
+      account.querying_draw_history = true;
+      account.draw_history_error = '';
+      render();
+      try {
+        account.draw_history_result = await request(`/api/accounts/${encodeURIComponent(account.id)}/draw-history`, { method: 'POST' });
+        account.draw_history_error = '';
+      } catch (error) {
+        account.draw_history_error = error.message;
+      } finally {
+        account.querying_draw_history = false;
+        render();
+      }
     }
     async function refreshActivityOnly(account) {
       try {
@@ -803,6 +1130,8 @@
         account.footer_tone = 'error';
       } finally {
         await finishActionAndRefresh(account, 'drawing');
+        await loadRuntimeLogs(true);
+        await refreshDrawHistoryOnly(account);
       }
     }
     async function queryActivity(id) {
@@ -927,19 +1256,61 @@
         focusStatus(account.id);
       }
     }
-    async function scheduleAdd(id, button) {
+    async function queryTokenUsage(id) {
+      const account = findAccount(id);
+      if (!account || account.querying_token_usage) return;
+      account.querying_token_usage = true;
+      render();
+      try {
+        account.token_usage_result = await request(`/api/accounts/${encodeURIComponent(id)}/token-usage`, { method: 'POST' });
+        account.token_usage_error = '';
+      } catch (error) {
+        account.token_usage_error = error.message;
+      } finally {
+        account.querying_token_usage = false;
+        render();
+        focusStatus(account.id);
+      }
+    }
+    function syncScheduleDialogFields() {
+      const kind = document.querySelector('#schedule-dialog-kind');
+      const end = document.querySelector('#schedule-dialog-end');
+      const endLabel = document.querySelector('#schedule-dialog-end-label');
+      const help = document.querySelector('#schedule-dialog-help');
+      const random = kind?.value === 'random';
+      if (end) { end.disabled = !random; end.required = random; if (!random) end.value = ''; }
+      if (endLabel) endLabel.setAttribute('aria-hidden', random ? 'false' : 'true');
+      if (help) help.textContent = random ? '每天在这个时间段内随机执行一次。' : '每天在指定时间执行一次。';
+    }
+    function openScheduleDialog(account) {
+      if (!account) return;
+      scheduleDialog.dataset.accountId = account.id;
+      document.querySelector('#schedule-dialog-account').textContent = account.label || account.id;
+      document.querySelector('#schedule-dialog-kind').value = 'fixed';
+      document.querySelector('#schedule-dialog-start').value = '';
+      document.querySelector('#schedule-dialog-end').value = '';
+      document.querySelector('#schedule-dialog-error').textContent = '';
+      document.querySelector('#schedule-dialog-submit').disabled = false;
+      syncScheduleDialogFields();
+      openDialog(scheduleDialog);
+      document.querySelector('#schedule-dialog-start').focus();
+    }
+    async function scheduleAdd(id) {
       const account = findAccount(id);
       if (!account || account.saving_schedule) return;
-      const section = button.closest('.auto-draw');
-      const kind = section.querySelector('.sched-kind').value;
-      const start = section.querySelector('.sched-start').value;
-      const end = section.querySelector('.sched-end').value;
-      if (!start) { setFooter(account, '添加计划失败：请选择开始时间', 'error'); render(); focusStatus(account.id); return; }
+      const kind = document.querySelector('#schedule-dialog-kind').value;
+      const start = document.querySelector('#schedule-dialog-start').value;
+      const end = document.querySelector('#schedule-dialog-end').value;
+      const errorNode = document.querySelector('#schedule-dialog-error');
+      if (!start) { errorNode.textContent = '请选择开始时间'; return; }
+      if (kind === 'random' && (!end || end <= start)) { errorNode.textContent = '时段随机需要设置晚于开始时间的结束时间'; return; }
       const entry = kind === 'random' ? { kind, start, end } : { kind, start };
       if (!account.auto_draw) await refreshAutoDrawStatus();
       const existing = scheduleEntries(account).map(({ id: entryID, kind: entryKind, start: entryStart, end: entryEnd }) => ({ id: entryID, kind: entryKind, start: entryStart, end: entryEnd }));
       account.saving_schedule = true;
-      render();
+      errorNode.textContent = '';
+      document.querySelector('#schedule-dialog-submit').disabled = true;
+      document.querySelector('#schedule-dialog-submit').textContent = '保存中';
       try {
         const payload = await request(`/api/accounts/${encodeURIComponent(id)}/draw-schedule`, {
           method: 'PUT',
@@ -948,10 +1319,14 @@
         });
         account.draw_schedules = payload.schedules || [];
         setFooter(account, '定时抽奖计划已保存', 'ok');
+        closeDialog(scheduleDialog);
       } catch (error) {
         setFooter(account, `定时抽奖计划保存失败：${error.message}`, 'error');
+        errorNode.textContent = error.message;
       } finally {
         account.saving_schedule = false;
+        document.querySelector('#schedule-dialog-submit').disabled = false;
+        document.querySelector('#schedule-dialog-submit').textContent = '添加计划';
         render();
         await refreshAutoDrawStatus();
         focusStatus(account.id);
@@ -994,16 +1369,29 @@
         render();
       }
     }
-    root.addEventListener('click', (event) => {
+    root.addEventListener('click', async (event) => {
       const manage = event.target.closest('[data-add-account],[data-edit-account],[data-validate-auth],[data-reauthenticate],[data-session-preview],[data-delete-account]');
       if (manage) { handleManagementAction(manage); return; }
-      const schedule = event.target.closest('[data-schedule-add],[data-schedule-remove]');
+      const schedule = event.target.closest('[data-schedule-remove]');
       if (schedule) {
-        if (schedule.dataset.scheduleAdd) scheduleAdd(schedule.dataset.scheduleAdd, schedule);
-        else scheduleRemove(schedule.dataset.scheduleRemove, schedule.dataset.scheduleId);
+        scheduleRemove(schedule.dataset.scheduleRemove, schedule.dataset.scheduleId);
         return;
       }
-      const button = event.target.closest('[data-refresh],[data-checkin],[data-claim],[data-draw],[data-draw-count],[data-activity],[data-balance],[data-purchase-draw],[data-unlock-pass]');
+      const scheduleFocus = event.target.closest('[data-focus-schedule]');
+      if (scheduleFocus) {
+        openScheduleDialog(findAccount(scheduleFocus.dataset.focusSchedule));
+        return;
+      }
+      const historyRefresh = event.target.closest('[data-draw-history-refresh]');
+      if (historyRefresh) {
+        const account = findAccount(historyRefresh.dataset.drawHistoryRefresh);
+        if (account) {
+          await refreshDrawHistoryOnly(account);
+          await loadRuntimeLogs(true);
+        }
+        return;
+      }
+      const button = event.target.closest('[data-refresh],[data-checkin],[data-claim],[data-draw],[data-draw-count],[data-activity],[data-balance],[data-token-usage],[data-purchase-draw],[data-unlock-pass]');
       if (!button) return;
       if (button.dataset.refresh) refreshAccount(button.dataset.refresh);
       else if (button.dataset.checkin) checkinAccount(button.dataset.checkin);
@@ -1012,6 +1400,7 @@
       else if (button.dataset.drawCount) queryDrawCount(button.dataset.drawCount);
       else if (button.dataset.activity) queryActivity(button.dataset.activity);
       else if (button.dataset.balance) balanceAccount(button.dataset.balance);
+      else if (button.dataset.tokenUsage) queryTokenUsage(button.dataset.tokenUsage);
       else if (button.dataset.purchaseDraw) purchaseDraw(button.dataset.purchaseDraw);
       else if (button.dataset.unlockPass) unlockPass(button.dataset.unlockPass);
     });
@@ -1036,6 +1425,7 @@
     function openDialog(dialog) { if (typeof dialog.showModal === 'function') dialog.showModal(); else dialog.setAttribute('open', ''); }
     function closeDialog(dialog) { dialog.close ? dialog.close() : dialog.removeAttribute('open'); }
     const accountDialog = document.querySelector('#account-dialog');
+    const scheduleDialog = document.querySelector('#schedule-dialog');
     const reauthDialog = document.querySelector('#reauth-dialog');
     const previewDialog = document.querySelector('#preview-dialog');
     const deleteDialog = document.querySelector('#delete-dialog');
@@ -1097,6 +1487,9 @@
     }
     accountDialog.addEventListener('submit', submitAccountDialog);
     document.querySelector('#account-dialog-cancel').addEventListener('click', () => { document.querySelector('#account-dialog-password').value = ''; closeDialog(accountDialog); });
+    document.querySelector('#schedule-dialog-kind').addEventListener('change', syncScheduleDialogFields);
+    scheduleDialog.addEventListener('submit', (event) => { event.preventDefault(); scheduleAdd(scheduleDialog.dataset.accountId); });
+    document.querySelector('#schedule-dialog-cancel').addEventListener('click', () => closeDialog(scheduleDialog));
     reauthDialog.addEventListener('submit', (event) => { event.preventDefault(); submitReauthenticate(reauthDialog.dataset.accountId); });
     document.querySelector('#reauth-dialog-cancel').addEventListener('click', () => closeDialog(reauthDialog));
     deleteDialog.addEventListener('submit', (event) => { event.preventDefault(); submitDelete(deleteDialog.dataset.accountId); });
@@ -1169,13 +1562,33 @@
       render();
       tabsRoot.querySelector('.account-tab[aria-selected="true"]')?.focus({ preventScroll: true });
     });
+    logoutButton.addEventListener('click', async () => {
+      if (logoutButton.disabled) return;
+      logoutButton.disabled = true;
+      logoutButton.textContent = '退出中';
+      logoutError.textContent = '';
+      logoutError.classList.remove('page-note--error');
+      try {
+        await request('/api/admin/logout', { method: 'POST' });
+      } catch (error) {
+        if (!error.loginRequired) {
+          logoutButton.disabled = false;
+          logoutButton.textContent = '退出登录';
+          logoutError.textContent = error.message || '退出失败，请稍后重试';
+          logoutError.classList.add('page-note--error');
+          return;
+        }
+      }
+      window.location.replace('/login?next=%2F');
+    });
     async function loadAccounts() {
       const payload = await request('/api/accounts');
       const previous = state.activeAccountId;
       state.accounts = Array.isArray(payload?.accounts) ? payload.accounts.map(hydrateAccount) : [];
       state.activeAccountId = state.accounts.some((item) => item.id === previous) ? previous : (state.accounts[0]?.id || null);
       render();
-      return refreshAutoDrawStatus();
+      await refreshAutoDrawStatus();
+      await loadDrawHistories();
     }
     renderRuntimeLogs();
     loadAccounts().catch((error) => {

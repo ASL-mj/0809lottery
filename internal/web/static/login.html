@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>登录 · 0809 账号工作台</title>
+  <style>
+    :root {
+      --ink: #171717;
+      --muted: #6f6f6b;
+      --line: #ddddda;
+      --line-strong: #c8c8c3;
+      --paper: #fff;
+      --surface: #f4f4f1;
+      --soft: #fafaf8;
+      --ok: #27613e;
+      --ok-bg: #f1f8f3;
+      --ok-line: #9cc4aa;
+      --error: #9d3535;
+      --error-bg: #fdf3f3;
+      --error-line: #d7b0b0;
+    }
+    * { box-sizing: border-box; }
+    body {
+      min-width: 320px;
+      min-height: 100vh;
+      margin: 0;
+      display: grid;
+      place-items: center;
+      padding: 28px 18px;
+      background: var(--surface);
+      color: var(--ink);
+      font: 14px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    button, input { font: inherit; }
+    button { cursor: pointer; }
+    button:disabled { cursor: wait; opacity: .6; }
+    button:focus-visible, input:focus-visible {
+      outline: 2px solid var(--ink);
+      outline-offset: 2px;
+    }
+    .login-shell { width: min(100%, 430px); }
+    .login-card {
+      overflow: hidden;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      background: var(--paper);
+      box-shadow: 0 12px 32px rgba(23, 23, 23, .06);
+    }
+    .login-card__head {
+      padding: 25px 26px 22px;
+      border-bottom: 1px solid var(--line);
+      background: var(--soft);
+    }
+    .brand-line {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--ok);
+      font-size: 11px;
+      font-weight: 680;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .brand-line__dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--ok);
+      box-shadow: 0 0 0 3px var(--ok-bg);
+    }
+    h1 {
+      margin: 12px 0 0;
+      font-size: 24px;
+      line-height: 1.2;
+      font-weight: 720;
+      letter-spacing: 0;
+    }
+    .login-card__description {
+      margin: 7px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .login-card__body { padding: 24px 26px 26px; }
+    .field { display: grid; gap: 7px; margin-bottom: 16px; }
+    .field label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .field__control { position: relative; }
+    .field input {
+      width: 100%;
+      height: 42px;
+      padding: 0 12px;
+      border: 1px solid var(--line-strong);
+      border-radius: 5px;
+      background: var(--paper);
+      color: var(--ink);
+    }
+    .field input[type="password"],
+    .field input[data-visible="true"] { padding-right: 74px; }
+    .field input::placeholder { color: #aaa9a4; }
+    .password-toggle {
+      position: absolute;
+      top: 50%;
+      right: 8px;
+      min-width: 54px;
+      min-height: 28px;
+      padding: 0 6px;
+      transform: translateY(-50%);
+      border: 0;
+      border-radius: 4px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .password-toggle:hover { background: var(--soft); color: var(--ink); }
+    .form-error {
+      min-height: 20px;
+      margin: 2px 0 14px;
+      padding: 0;
+      color: var(--error);
+      font-size: 12px;
+    }
+    .form-error:not(:empty) {
+      padding: 9px 10px;
+      border: 1px solid var(--error-line);
+      border-radius: 5px;
+      background: var(--error-bg);
+    }
+    .login-submit {
+      width: 100%;
+      min-height: 42px;
+      border: 1px solid var(--ink);
+      border-radius: 5px;
+      background: var(--ink);
+      color: var(--paper);
+      font-weight: 640;
+      transition: background-color 160ms ease, border-color 160ms ease;
+    }
+    .login-submit:hover:not(:disabled) { border-color: #303030; background: #303030; }
+    .login-card__foot {
+      padding: 13px 26px 15px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 11px;
+      text-align: center;
+    }
+    @media (max-width: 460px) {
+      body { padding: 16px 12px; }
+      .login-card__head, .login-card__body { padding-left: 20px; padding-right: 20px; }
+      .login-card__foot { padding-left: 20px; padding-right: 20px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <main class="login-shell">
+    <section class="login-card" aria-labelledby="login-title">
+      <div class="login-card__head">
+        <div class="brand-line"><span class="brand-line__dot" aria-hidden="true"></span>本机安全工作台</div>
+        <h1 id="login-title">登录 0809 账号工作台</h1>
+        <p class="login-card__description">使用管理员账号进入多账号管理页面。</p>
+      </div>
+      <form id="login-form" class="login-card__body" novalidate>
+        <div class="field">
+          <label for="login-username">管理员账号</label>
+          <div class="field__control">
+            <input id="login-username" name="username" type="text" autocomplete="username" required autofocus>
+          </div>
+        </div>
+        <div class="field">
+          <label for="login-password">管理员密码</label>
+          <div class="field__control">
+            <input id="login-password" name="password" type="password" autocomplete="current-password" required>
+            <button id="password-toggle" class="password-toggle" type="button" aria-controls="login-password" aria-pressed="false">显示</button>
+          </div>
+        </div>
+        <p id="login-error" class="form-error" role="alert" aria-live="polite"></p>
+        <button id="login-submit" class="login-submit" type="submit">登录</button>
+      </form>
+      <footer class="login-card__foot">登录只建立本地工作台会话，不会重复登录平台账号。</footer>
+    </section>
+  </main>
+  <script>
+    const form = document.querySelector('#login-form');
+    const usernameInput = document.querySelector('#login-username');
+    const passwordInput = document.querySelector('#login-password');
+    const passwordToggle = document.querySelector('#password-toggle');
+    const errorNode = document.querySelector('#login-error');
+    const submitButton = document.querySelector('#login-submit');
+
+    function csrfToken() {
+      const match = document.cookie.match(/(?:^|;\s*)workbench_csrf=([^;]*)/);
+      if (!match) return '';
+      try {
+        return decodeURIComponent(match[1]);
+      } catch (_) {
+        return '';
+      }
+    }
+
+    function safeNext(value) {
+      const raw = value || new URLSearchParams(window.location.search).get('next') || '/';
+      if (!raw.startsWith('/') || raw.startsWith('//') || raw.includes('\\')) return '/';
+      try {
+        const destination = new URL(raw, window.location.origin);
+        if (destination.origin !== window.location.origin) return '/';
+        return `${destination.pathname}${destination.search}${destination.hash}`;
+      } catch (_) {
+        return '/';
+      }
+    }
+
+    function setError(message) {
+      errorNode.textContent = message || '';
+    }
+
+    passwordToggle.addEventListener('click', () => {
+      const visible = passwordInput.type === 'text';
+      passwordInput.type = visible ? 'password' : 'text';
+      passwordInput.dataset.visible = visible ? 'false' : 'true';
+      passwordToggle.textContent = visible ? '显示' : '隐藏';
+      passwordToggle.setAttribute('aria-pressed', String(!visible));
+    });
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (submitButton.disabled) return;
+      setError('');
+      if (!usernameInput.value.trim() || !passwordInput.value) {
+        setError('请输入管理员账号和密码。');
+        return;
+      }
+      const token = csrfToken();
+      if (!token) {
+        setError('登录安全令牌不可用，请刷新页面后重试。');
+        return;
+      }
+      submitButton.disabled = true;
+      submitButton.textContent = '登录中';
+      try {
+        const response = await fetch('/api/admin/login', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': token,
+          },
+          body: JSON.stringify({
+            username: usernameInput.value.trim(),
+            password: passwordInput.value,
+          }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          setError(response.status === 401 ? '管理员账号或密码不正确。' : (data.error || '登录失败，请稍后重试。'));
+          return;
+        }
+        window.location.replace(safeNext(data.redirect));
+      } catch (_) {
+        setError('无法连接工作台，请检查服务是否正在运行。');
+      } finally {
+        submitButton.disabled = false;
+        submitButton.textContent = '登录';
+      }
+    });
+  </script>
+</body>
+</html>

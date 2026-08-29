@@ -147,7 +147,7 @@ func TestHandlerRequiresBasicAuth(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/api/health", nil)
 	recorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusUnauthorized || recorder.Header().Get("WWW-Authenticate") != `Basic realm="0809 Account Workbench", charset="UTF-8"` {
+	if recorder.Code != http.StatusUnauthorized || recorder.Header().Get("WWW-Authenticate") != "" || !strings.Contains(recorder.Body.String(), "login_required") {
 		t.Fatalf("authentication response = %d %#v", recorder.Code, recorder.Header())
 	}
 }
@@ -189,12 +189,12 @@ func TestRuntimeLogsEndpointReturnsOnlySafeDisplayFields(t *testing.T) {
 		t.Fatalf("EnsureAutoDrawPlans() = %#v, %v", secretPlan, err)
 	}
 	if _, err := store.AppendRuntimeLog(state.RuntimeLog{
-		OccurredAt: time.Date(2026, time.August, 8, 0, 6, 0, 0, time.UTC),
-		AccountID:  "account-a",
-		WindowID:   "morning",
-		Status:     state.AutoDrawPlanCompleted,
-		Message:    "自动抽奖成功",
-		PrizeLabel: "额度奖励",
+		OccurredAt:    time.Date(2026, time.August, 8, 0, 6, 0, 0, time.UTC),
+		AccountID:     "account-a",
+		WindowID:      "morning",
+		Status:        state.AutoDrawPlanCompleted,
+		Message:       "自动抽奖成功",
+		PrizeLabel:    "额度奖励",
 		QuotaDeltaUSD: testMoneyPtr("1.25"),
 	}); err != nil {
 		t.Fatalf("AppendRuntimeLog() error = %v", err)
@@ -526,6 +526,7 @@ func TestAccountActionsValidatePathMethodAndAccount(t *testing.T) {
 		{method: http.MethodGet, target: "/api/accounts/account-a/activity", want: http.StatusMethodNotAllowed},
 		{method: http.MethodGet, target: "/api/accounts/account-a/purchase-draw", want: http.StatusMethodNotAllowed},
 		{method: http.MethodGet, target: "/api/accounts/account-a/unlock-pass", want: http.StatusMethodNotAllowed},
+		{method: http.MethodGet, target: "/api/accounts/account-a/token-usage", want: http.StatusMethodNotAllowed},
 		{method: http.MethodPost, target: "/api/accounts/unknown/checkin", want: http.StatusNotFound},
 		{method: http.MethodPost, target: "/api/accounts/unknown/claim", want: http.StatusNotFound},
 		{method: http.MethodPost, target: "/api/accounts/unknown/draw", want: http.StatusNotFound},
@@ -1023,6 +1024,14 @@ func TestDrawActionReturnsSanitizedOutcomeAndServerGeneratedKey(t *testing.T) {
 	if dashboardCalls.Load() != 1 || drawCalls.Load() != 1 || statusCalls.Load() != 1 {
 		t.Fatalf("unexpected upstream calls: dashboard=%d draw=%d status=%d", dashboardCalls.Load(), drawCalls.Load(), statusCalls.Load())
 	}
+	logStore, err := server.sharedStore()
+	if err != nil {
+		t.Fatalf("sharedStore after draw = %v", err)
+	}
+	logs := logStore.RuntimeLogs(1)
+	if len(logs) != 1 || logs[0].AccountID != "account-a" || logs[0].WindowID != "manual" || logs[0].Status != state.AutoDrawPlanCompleted || logs[0].PrizeLabel != "额度奖励" || logs[0].QuotaDeltaUSD == nil || logs[0].QuotaDeltaUSD.Value != "0.5" {
+		t.Fatalf("manual draw runtime log = %#v", logs)
+	}
 }
 
 func TestDrawActionSkipsWithoutQuota(t *testing.T) {
@@ -1063,6 +1072,57 @@ func TestDrawActionSkipsWithoutQuota(t *testing.T) {
 	}
 	if dashboardCalls.Load() != 1 || drawCalls.Load() != 0 {
 		t.Fatalf("unexpected upstream calls: dashboard=%d draw=%d", dashboardCalls.Load(), drawCalls.Load())
+	}
+	logStore, err := server.sharedStore()
+	if err != nil {
+		t.Fatalf("sharedStore after skipped draw = %v", err)
+	}
+	logs := logStore.RuntimeLogs(1)
+	if len(logs) != 1 || logs[0].WindowID != "manual" || logs[0].Status != state.AutoDrawPlanSkipped {
+		t.Fatalf("skipped manual draw runtime log = %#v", logs)
+	}
+}
+
+func TestDrawHistoryEndpointReturnsPlatformHistoryProjection(t *testing.T) {
+	today := time.Now().UTC().Format("2006-01-02")
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/lottery/api/dashboard":
+			_, _ = writer.Write([]byte(`{"eligibility":{"remaining":1},"history":[{"id":"draw-history-1","status":"fulfilled","fulfillmentStatus":"active","fulfillmentMessage":"额度已到账","createdAt":"` + today + `T01:02:03Z","prize":{"label":"小额额度丙 · 1 天 5 额度","shortLabel":"小额额度丙","description":"限时额度即时生效","grade":"丙","quotaAmount":5,"validityHours":24},"effect":{"summary":"限时额度与订阅已生效","accessLabel":"福利订阅","quotaDelta":5,"expiresAt":"` + today + `T02:02:03Z"}}]}`))
+		case "/api/status":
+			_, _ = writer.Write([]byte(`{"success":true,"data":{"quota_per_unit":500}}`))
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer upstream.Close()
+
+	server := testServer(t)
+	server.cfg.BaseURL = upstream.URL
+	store, err := state.Open(server.cfg.StatePath)
+	if err != nil {
+		t.Fatalf("open state = %v", err)
+	}
+	if err := store.PutAuth("account-a", state.AuthState{LotteryAccessToken: "lottery-token", LotteryAccessExpiresAt: time.Now().Add(time.Hour), ParentAccessToken: "parent-token", ParentAccessExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatalf("put auth = %v", err)
+	}
+	_ = store.Close()
+
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, authenticatedRequest(http.MethodPost, "/api/accounts/account-a/draw-history", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("draw history status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	body := recorder.Body.String()
+	for _, expected := range []string{`"account_id":"account-a"`, `"prize_short_label":"小额额度丙"`, `"prize_description":"限时额度即时生效"`, `"prize_grade":"丙"`, `"effect_access_label":"福利订阅"`, `"expires_at":"`, `"quota_delta_usd":{"currency":"USD","value":"5","display":"$5.00","state":"confirmed","source":"draw.history.prize.quota_amount","formula":"already-usd-v1: usd = upstream usd value"`} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("draw history response missing %q: %s", expected, body)
+		}
+	}
+	for _, forbidden := range []string{"permanentBalance", "wheelIndex", "lottery-token", "parent-token"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("draw history response leaked %q: %s", forbidden, body)
+		}
 	}
 }
 
@@ -1335,7 +1395,7 @@ func TestIndexExposesAccountManagementControls(t *testing.T) {
 		}
 	}
 	for _, feature := range []string{
-		"data-balance", "data-schedule-add", "data-schedule-remove", "data-session-revoke", "data-session-revoke-others",
+		"data-balance", "data-schedule-remove", "data-session-revoke", "data-session-revoke-others", "id=\"schedule-dialog\"", "id=\"schedule-dialog-submit\"", ".plan-list { margin:0; padding:0; list-style:none; }",
 		"账户余额", "/api/accounts/", "draw-schedule",
 	} {
 		if !bytes.Contains(indexHTML, []byte(feature)) {
@@ -1368,23 +1428,22 @@ func TestIndexContainsOnlyAccountControls(t *testing.T) {
 	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "刷新订阅") || !strings.Contains(recorder.Body.String(), "刷新次数") || !strings.Contains(recorder.Body.String(), "领取次数") || !strings.Contains(recorder.Body.String(), "手动抽奖") {
 		t.Fatalf("index response = %d: %s", recorder.Code, recorder.Body.String())
 	}
-	for _, expected := range []string{"今日签到奖励", "今日已签到 · 奖励待核对", "renderCheckinReward(account)", ".account__checkin-reward"} {
+	for _, expected := range []string{"今日签到奖励", "今日已签到 · 奖励待核对", "renderCheckinReward(account)", ".account__checkin-reward", "formatRelativeTime", "分钟前", "小时前", "formatTokenCount", "formatTokenCount(usage.total_tokens)"} {
 		if !strings.Contains(recorder.Body.String(), expected) {
 			t.Fatalf("index missing check-in reward display %q", expected)
 		}
 	}
-	for _, expected := range []string{"签到成功：", "签到失败：", "已签到", "领取成功：", "领取失败：", "抽奖成功：", "抽奖失败：", "跳过抽奖：", "今日已领取", "领取结果待确认", "核对结果", "data-checkin", "data-claim", "data-draw", "data-draw-count", "data-refresh", "data-activity", "data-purchase-draw", "data-unlock-pass", "领取中", "抽奖中", "刷新活动", "购买 1 抽 · $", "购买通行证 · $", "今日通行证已购买", "距下一档还需", "今日累计加抽", "全部档位已完成", "window.confirm", "仅北京时间当日有效", "await finishActionAndRefresh(account, 'claiming');", "await finishActionAndRefresh(account, 'drawing');", "await refreshDrawCountOnly(account);", "account.activity_result", "account.activity_error", "pass_unlocked", "purchase_pending", "purchase_unknown", "currentFocusTarget()", "restoreFocus(target)", "390px", ":focus-visible", ".account__identity", ".action--primary", ".metrics", ".metric__value", "<section id=\"accounts\" aria-label=\"账号详情\">", "role=\"status\"", "data-status-account", "额度统一以美元显示", "@media (max-width:1040px)", "@media (max-width:620px)", "系统运行日志", "自动抽奖执行结果，最新优先展示。", "id=\"runtime-logs-refresh\"", "/api/runtime-logs", "运行日志拉取失败：", "最近一次刷新失败：", "暂无运行日志。", "正在读取运行日志...", "morning: '早间 08:00–09:00'", "midday: '午间 13:00–14:00'", "evening: '晚间 18:00–19:00'", "log.account_label || log.account_id", "奖品：", "额度：$", "账号：", "窗口：", "renderRuntimeLogs()", "runtime-log__status", "runtime-state--error", "今日定时抽奖", "已执行 ${handled}/${entries.length}", ".auto-draw__timeline", ".auto-draw__step--completed", "renderAutoDrawSchedule(account)", "/api/auto-draw-status", "refreshAutoDrawStatus()", "30000", "计划待生成", "执行中", "已跳过"} {
+	for _, expected := range []string{"签到成功：", "签到失败：", "已签到", "领取成功：", "领取失败：", "抽奖成功：", "抽奖失败：", "跳过抽奖：", "今日已领取", "领取结果待确认", "核对结果", "data-checkin", "data-claim", "data-draw", "data-draw-count", "data-refresh", "data-activity", "data-purchase-draw", "data-unlock-pass", "领取中", "抽奖中", "刷新活动", "购买 1 抽 · $", "购买通行证 · $", "今日通行证已购买", "距下一档还需", "今日累计加抽", "全部档位已完成", "window.confirm", "仅北京时间当日有效", "await finishActionAndRefresh(account, 'claiming');", "await finishActionAndRefresh(account, 'drawing');", "await refreshDrawCountOnly(account);", "account.activity_result", "account.activity_error", "pass_unlocked", "purchase_pending", "purchase_unknown", "currentFocusTarget()", "restoreFocus(target)", "390px", ":focus-visible", ".account__identity", ".action--primary", ".metrics", ".metric__value", "<section id=\"accounts\" aria-label=\"账号详情\">", "role=\"status\"", "data-status-account", "额度统一以美元显示", "@media (max-width:1040px)", "@media (max-width:620px)", "系统运行日志", "抽奖执行结果，最新优先展示。", "id=\"runtime-logs-refresh\"", "/api/runtime-logs", "运行日志拉取失败：", "最近一次刷新失败：", "暂无运行日志。", "正在读取运行日志...", "morning: '早间 08:00–09:00'", "midday: '午间 13:00–14:00'", "evening: '晚间 18:00–19:00'", "log.account_label || log.account_id", "奖品：", "额度：$", "账号：", "窗口：", "renderRuntimeLogs()", "runtime-log__status", "runtime-state--error", "今日已完成 ${handled}/${entries.length}", ".auto-draw__timeline", ".auto-draw__step--completed", "renderAutoDrawSchedule(account)", "/api/auto-draw-status", "refreshAutoDrawStatus()", "30000", "计划待生成", "执行中", "已跳过", "renderDrawHistory(account)", "data-draw-history-refresh", "今日抽奖记录", "draw_history_result", "/api/accounts/", "draw-history", "id=\"schedule-dialog\"", "openScheduleDialog(account)", "data-focus-schedule", "formatValidity", "drawHistoryExpiry", "quota_delta_usd"} {
 		if !strings.Contains(recorder.Body.String(), expected) {
 			t.Fatalf("index missing check-in feedback %q", expected)
 		}
 	}
-	for _, forbidden := range []string{"刷新全部订阅", "全部签到", "任务管理", "主动抽奖", "登录并保存", "解锁抽奖", "购买抽数", "执行抽奖", "统计控制", "查询抽奖次数", "账号密码", "Cookie", "Access Token", "保存凭证"} {
+	for _, forbidden := range []string{"刷新全部订阅", "全部签到", "任务管理", "主动抽奖", "登录并保存", "解锁抽奖", "购买抽数", "执行抽奖", "统计控制", "查询抽奖次数", "账号密码", "Cookie", "Access Token", "保存凭证", "auto-draw__form", "data-schedule-add", "sched-kind", "sched-start", "sched-end", "draw-history-item__description", "奖项说明", "生效说明"} {
 		if strings.Contains(recorder.Body.String(), forbidden) {
 			t.Fatalf("index contains removed control %q", forbidden)
 		}
 	}
 }
-
 
 func testMoneyPtr(raw string) *quota.Money {
 	amount, err := quota.ParseUSD(raw)
@@ -1394,7 +1453,6 @@ func testMoneyPtr(raw string) *quota.Money {
 	money := quota.NewAlreadyUSDPolicy().Convert(amount, quota.Provenance{Source: "test"})
 	return &money
 }
-
 
 func TestDrawScheduleRoundTripAndValidation(t *testing.T) {
 	server := testServer(t)
@@ -1495,5 +1553,98 @@ func TestBalanceEndpointReturnsMoneySnapshotAndStoresUsage(t *testing.T) {
 	server.Handler().ServeHTTP(list, authenticatedRequest(http.MethodGet, "/api/accounts", nil))
 	if !strings.Contains(list.Body.String(), "usage_snapshot") {
 		t.Fatalf("account list missing usage snapshot: %s", list.Body.String())
+	}
+}
+
+func TestTokenUsageEndpointReturnsDailyRankingAndStoresSnapshot(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/api/rankings/users" {
+			if request.Header.Get("Authorization") != "Bearer parent-token" || request.Header.Get("X-Current-User-ID") != "42" {
+				t.Fatalf("ranking headers = authorization=%q current-user=%q", request.Header.Get("Authorization"), request.Header.Get("X-Current-User-ID"))
+			}
+			query := request.URL.Query()
+			if query.Get("period") != "today" || query.Get("sort_by") != "tokens" {
+				t.Fatalf("ranking query = %#v", query)
+			}
+			_, _ = writer.Write([]byte(`{"success":true,"data":{"period":"today","users":[{"user_id":42,"total_tokens":12345,"call_count":67,"total_quota":2500000}],"current_user":{"user_id":42,"total_tokens":12345,"call_count":67,"total_quota":2500000},"billing":{"currency":"USD","quota_per_unit":500000},"updated_at":1787976333}}`))
+			return
+		}
+		if request.URL.Path == "/api/user/checkin" {
+			writer.WriteHeader(http.StatusBadGateway)
+			_, _ = writer.Write([]byte(`{"success":false,"message":"test status unavailable"}`))
+			return
+		}
+		http.NotFound(writer, request)
+	}))
+	defer upstream.Close()
+
+	server := testServer(t)
+	server.cfg.BaseURL = upstream.URL
+	store, err := server.sharedStore()
+	if err != nil {
+		t.Fatalf("sharedStore() error = %v", err)
+	}
+	if err := store.PutAuth("account-a", state.AuthState{
+		UserID:                42,
+		ParentAccessToken:     "parent-token",
+		ParentAccessExpiresAt: time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("PutAuth() error = %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, authenticatedRequest(http.MethodPost, "/api/accounts/account-a/token-usage", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("token usage status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	body := recorder.Body.String()
+	for _, required := range []string{
+		`"account_id":"account-a"`,
+		`"period":"today"`,
+		`"total_tokens":12345`,
+		`"call_count":67`,
+		`"consumed_quota_usd":{"currency":"USD","value":"5"`,
+	} {
+		if !strings.Contains(body, required) {
+			t.Fatalf("token usage response missing %q: %s", required, body)
+		}
+	}
+	if strings.Contains(body, `"total_quota"`) || strings.Contains(body, "parent-token") {
+		t.Fatalf("token usage response leaked native or auth data: %s", body)
+	}
+	if _, ok := store.Snapshot("account-a", "token-usage"); !ok {
+		t.Fatal("token usage snapshot missing after query")
+	}
+
+	list := httptest.NewRecorder()
+	server.Handler().ServeHTTP(list, authenticatedRequest(http.MethodGet, "/api/accounts", nil))
+	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), "token_usage_snapshot") {
+		t.Fatalf("account list token usage snapshot = %d: %s", list.Code, list.Body.String())
+	}
+}
+
+func TestAccountsIgnoreStaleTokenUsageSnapshot(t *testing.T) {
+	server := testServer(t)
+	store, err := server.sharedStore()
+	if err != nil {
+		t.Fatalf("sharedStore() error = %v", err)
+	}
+	stale := []byte(`{"account_id":"account-a","period":"today","day_key":"2026-08-28","total_tokens":100}`)
+	if err := store.PutSnapshot(state.Snapshot{
+		AccountID: "account-a",
+		Kind:      "token-usage",
+		Data:      stale,
+		QueriedAt: time.Date(2026, 8, 28, 6, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("PutSnapshot() error = %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, authenticatedRequest(http.MethodGet, "/api/accounts", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("accounts status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), "token_usage_snapshot") {
+		t.Fatalf("stale token usage snapshot must be hidden: %s", recorder.Body.String())
 	}
 }

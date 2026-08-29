@@ -140,6 +140,12 @@ func (s *Server) handleAccountList(writer http.ResponseWriter, request *http.Req
 				item["draw_count_snapshot"] = map[string]interface{}{"data": json.RawMessage(snapshot.Data), "queried_at": snapshot.QueriedAt}
 			}
 		}
+		if snapshot, ok := store.Snapshot(record.ID, "draw-history"); ok {
+			var data service.DrawHistoryReport
+			if json.Unmarshal(snapshot.Data, &data) == nil && data.AccountID == record.ID {
+				item["draw_history_snapshot"] = map[string]interface{}{"data": json.RawMessage(snapshot.Data), "queried_at": snapshot.QueriedAt}
+			}
+		}
 		if snapshot, ok := store.Snapshot(record.ID, "activity"); ok {
 			var data service.ActivityReport
 			if json.Unmarshal(snapshot.Data, &data) == nil && data.AccountID == record.ID {
@@ -148,6 +154,12 @@ func (s *Server) handleAccountList(writer http.ResponseWriter, request *http.Req
 		}
 		if snapshot, ok := store.Snapshot(record.ID, "usage"); ok {
 			item["usage_snapshot"] = map[string]interface{}{"data": json.RawMessage(snapshot.Data), "queried_at": snapshot.QueriedAt}
+		}
+		if snapshot, ok := store.Snapshot(record.ID, "token-usage"); ok {
+			var data service.TokenUsageReport
+			if json.Unmarshal(snapshot.Data, &data) == nil && data.AccountID == record.ID && data.DayKey == today {
+				item["token_usage_snapshot"] = map[string]interface{}{"data": json.RawMessage(snapshot.Data), "queried_at": snapshot.QueriedAt}
+			}
 		}
 		accounts = append(accounts, item)
 	}
@@ -258,7 +270,7 @@ func (s *Server) handleAccountActions(writer http.ResponseWriter, request *http.
 		action = action + "/" + strings.Join(parts[4:], "/")
 	}
 	switch action {
-	case "checkin", "claim", "draw", "activity", "purchase-draw", "unlock-pass", "reauthenticate", "validate", "balance", "sessions/cleanup", "sessions/revoke", "sessions/revoke-others":
+	case "checkin", "claim", "draw", "draw-history", "activity", "purchase-draw", "unlock-pass", "reauthenticate", "validate", "balance", "token-usage", "sessions/cleanup", "sessions/revoke", "sessions/revoke-others":
 		if request.Method != http.MethodPost {
 			writeError(writer, http.StatusMethodNotAllowed, "请求方法不支持")
 			return
@@ -291,6 +303,8 @@ func (s *Server) handleAccountActions(writer http.ResponseWriter, request *http.
 		s.handleClaimAction(writer, request, accountID)
 	case "draw":
 		s.handleDrawAction(writer, request, accountID)
+	case "draw-history":
+		s.handleDrawHistoryAction(writer, request, accountID)
 	case "activity":
 		s.handleActivityAction(writer, request, accountID)
 	case "purchase-draw":
@@ -317,12 +331,14 @@ func (s *Server) handleAccountActions(writer http.ResponseWriter, request *http.
 		}
 	case "balance":
 		s.handleBalanceAction(writer, request, accountID)
+	case "token-usage":
+		s.handleTokenUsageAction(writer, request, accountID)
 	}
 }
 
 func isBusinessAction(action string) bool {
 	switch action {
-	case "checkin", "claim", "draw", "activity", "purchase-draw", "unlock-pass", "balance":
+	case "checkin", "claim", "draw", "draw-history", "activity", "purchase-draw", "unlock-pass", "balance", "token-usage":
 		return true
 	}
 	return false
@@ -550,8 +566,8 @@ func (s *Server) handleAccountReauthenticate(writer http.ResponseWriter, request
 		return
 	}
 	writeJSON(writer, http.StatusOK, map[string]interface{}{
-		"account":     accountViewFromRecord(refreshed, account.AuthHealthy),
-		"message":     "重新认证成功",
+		"account": accountViewFromRecord(refreshed, account.AuthHealthy),
+		"message": "重新认证成功",
 	})
 }
 
@@ -817,6 +833,28 @@ func (s *Server) handleBalanceAction(writer http.ResponseWriter, request *http.R
 	})
 }
 
+// handleTokenUsageAction queries the account's current-day ranking record.
+func (s *Server) handleTokenUsageAction(writer http.ResponseWriter, request *http.Request, accountID string) {
+	ctx, cancel := context.WithTimeout(request.Context(), 90*time.Second)
+	defer cancel()
+	store, err := s.sharedStore()
+	if err != nil {
+		writeStoreError(writer, err)
+		return
+	}
+	runner, err := s.runnerFor(store)
+	if err != nil {
+		writeStoreError(writer, err)
+		return
+	}
+	report, err := runner.QueryTokenUsage(ctx, accountID)
+	if err != nil {
+		writeUpstreamError(writer, "token-usage", accountID, err, "今日消耗查询暂时失败，请稍后重试")
+		return
+	}
+	writeJSON(writer, http.StatusOK, report)
+}
+
 func safePublicText(value string) string {
 	value = strings.TrimSpace(value)
 	if len(value) > 120 {
@@ -935,6 +973,9 @@ func (s *Server) handleDrawAction(writer http.ResponseWriter, request *http.Requ
 	}
 	outcome, err := runner.DrawAvailable(ctx, accountID, drawKey)
 	if err != nil {
+		if appendErr := appendDrawRuntimeLog(store, accountID, state.AutoDrawPlanFailed, "手动抽奖失败", "", nil); appendErr != nil {
+			log.Printf("append manual draw failure log failed for account=%s: %v", accountID, appendErr)
+		}
 		writeUpstreamError(writer, "draw", accountID, err, "手动抽奖暂时失败，请稍后重试")
 		return
 	}
@@ -957,7 +998,48 @@ func (s *Server) handleDrawAction(writer http.ResponseWriter, request *http.Requ
 		PrizeLabel:      prizeLabel,
 		QuotaDeltaUSD:   outcome.QuotaDeltaUSD,
 	}
+	status := state.AutoDrawPlanCompleted
+	if outcome.Skipped {
+		status = state.AutoDrawPlanSkipped
+	}
+	if appendErr := appendDrawRuntimeLog(store, accountID, status, outcome.Message, prizeLabel, outcome.QuotaDeltaUSD); appendErr != nil {
+		log.Printf("append manual draw log failed for account=%s: %v", accountID, appendErr)
+	}
 	writeJSON(writer, http.StatusOK, response)
+}
+
+func (s *Server) handleDrawHistoryAction(writer http.ResponseWriter, request *http.Request, accountID string) {
+	ctx, cancel := context.WithTimeout(request.Context(), 2*time.Minute)
+	defer cancel()
+	store, err := s.sharedStore()
+	if err != nil {
+		writeStoreError(writer, err)
+		return
+	}
+	runner, err := s.runnerFor(store)
+	if err != nil {
+		writeStoreError(writer, err)
+		return
+	}
+	report, err := runner.QueryDrawHistory(ctx, accountID)
+	if err != nil {
+		writeUpstreamError(writer, "draw-history", accountID, err, "抽奖记录暂时刷新失败，请稍后重试")
+		return
+	}
+	writeJSON(writer, http.StatusOK, report)
+}
+
+func appendDrawRuntimeLog(store *state.Store, accountID string, status state.AutoDrawPlanStatus, message, prizeLabel string, quotaDelta *quota.Money) error {
+	_, err := store.AppendRuntimeLog(state.RuntimeLog{
+		OccurredAt:    time.Now().UTC(),
+		AccountID:     accountID,
+		WindowID:      "manual",
+		Status:        status,
+		Message:       message,
+		PrizeLabel:    prizeLabel,
+		QuotaDeltaUSD: quotaDelta,
+	})
+	return err
 }
 
 func (s *Server) handleActivityAction(writer http.ResponseWriter, request *http.Request, accountID string) {
@@ -1015,7 +1097,7 @@ func (s *Server) handlePurchaseAction(writer http.ResponseWriter, request *http.
 		AccountID string                  `json:"account_id"`
 		Status    string                  `json:"status"`
 		Message   string                  `json:"message"`
-		PriceUSD  *quota.Money          `json:"price_usd,omitempty"`
+		PriceUSD  *quota.Money            `json:"price_usd,omitempty"`
 		Remaining *int                    `json:"remaining,omitempty"`
 		Activity  *service.ActivityReport `json:"activity,omitempty"`
 	}{

@@ -28,6 +28,7 @@ var shanghaiLocation = func() *time.Location {
 // (login, refresh, bridge) lives exclusively in the auth broker.
 type WebsiteClient interface {
 	UserSelf(context.Context, string) (lottery.UserUsage, error)
+	RankingsUsers(context.Context, string, int64, string) (lottery.UserRanking, error)
 	Draw(context.Context, string, string) (lottery.DrawResult, error)
 	PurchaseDraw(context.Context, string, string) (lottery.OperationResult, error)
 	UnlockDrawLimit(context.Context, string, string) (lottery.OperationResult, error)

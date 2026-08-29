@@ -104,34 +104,48 @@ func (r *Runner) DrawAvailableScheduled(ctx context.Context, accountID, idempote
 // best-effort basis; a failing parent session never invalidates the draw.
 // Without a verified conversion rule the snapshot is explicitly unavailable.
 func (r *Runner) quotaDeltaMoneyForDraw(ctx context.Context, client WebsiteClient, accountID string, result lottery.DrawResult) *quota.Money {
-	if result.Effect.QuotaDelta == 0 {
+	quotaAmount, source, alreadyUSD, ok := drawResultQuotaAmount(result)
+	if !ok {
 		return nil
 	}
 	observedAt := r.now().UTC()
 	sess, err := r.acquire(ctx, accountID, auth.ReadOnly, auth.SessionParent)
 	if err != nil {
-		delta := quota.UnavailableUSD("draw.effect.quota_delta", observedAt)
+		delta := quota.UnavailableUSD(source, observedAt)
 		return &delta
 	}
 	settings, statusErr := client.Status(ctx, sess.token)
 	if statusErr != nil && subscriptionAuthError(statusErr) {
 		renewed, renewErr := r.renewParent(ctx, accountID, sess.token)
 		if renewErr != nil {
-			delta := quota.UnavailableUSD("draw.effect.quota_delta", observedAt)
+			delta := quota.UnavailableUSD(source, observedAt)
 			return &delta
 		}
 		retryClient, clientErr := r.clientFor(renewed)
 		if clientErr != nil {
-			delta := quota.UnavailableUSD("draw.effect.quota_delta", observedAt)
+			delta := quota.UnavailableUSD(source, observedAt)
 			return &delta
 		}
 		settings, statusErr = retryClient.Status(ctx, renewed.token)
 		client = retryClient
 	}
 	if statusErr != nil {
-		delta := quota.UnavailableUSD("draw.effect.quota_delta", observedAt)
+		delta := quota.UnavailableUSD(source, observedAt)
 		return &delta
 	}
-	delta := QuotaMoney(result.Effect.QuotaDelta, settings, "draw.effect.quota_delta", observedAt)
+	delta := QuotaMoney(quotaAmount, settings, source, observedAt)
+	if alreadyUSD {
+		delta = USDMoney(quotaAmount, source, observedAt)
+	}
 	return &delta
+}
+
+func drawResultQuotaAmount(result lottery.DrawResult) (float64, string, bool, bool) {
+	if result.Prize.QuotaAmount > 0 {
+		return result.Prize.QuotaAmount, "draw.prize.quota_amount", true, true
+	}
+	if result.Effect.QuotaDelta > 0 {
+		return result.Effect.QuotaDelta, "draw.effect.quota_delta", false, true
+	}
+	return 0, "", false, false
 }

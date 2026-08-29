@@ -21,7 +21,10 @@ import (
 	"skyeapi/lottery-bot/internal/state"
 )
 
-const maxErrorBody = 64 << 10
+const (
+	maxErrorBody   = 64 << 10
+	maxRankingBody = 1 << 20
+)
 
 type APIError struct {
 	StatusCode int
@@ -73,6 +76,7 @@ type Dashboard struct {
 	Lucky       map[string]any       `json:"lucky"`
 	Purchase    map[string]any       `json:"purchase"`
 	DrawLimit   DrawLimit            `json:"drawLimit"`
+	History     []DrawHistoryEntry   `json:"history"`
 }
 
 type DashboardRules struct {
@@ -193,6 +197,50 @@ type UserUsage struct {
 	QuotaConversionError     string       `json:"-"`
 }
 
+const RankingPeriodToday = "today"
+
+// RankingUser is the per-user record returned by /api/rankings/users. The
+// upstream values are native quota units; callers must use Billing.QuotaPerUnit
+// before exposing an amount as USD.
+type RankingUser struct {
+	UserID           int64 `json:"user_id"`
+	TotalTokens      int64 `json:"total_tokens"`
+	PromptTokens     int64 `json:"prompt_tokens"`
+	CompletionTokens int64 `json:"completion_tokens"`
+	CallCount        int64 `json:"call_count"`
+	TotalQuota       int64 `json:"total_quota"`
+}
+
+type RankingBilling struct {
+	Currency     string  `json:"currency"`
+	QuotaPerUnit float64 `json:"quota_per_unit"`
+}
+
+// UserRanking is the sanitized response needed by the account workbench. It
+// intentionally omits the platform-wide summary and channel details.
+type UserRanking struct {
+	Period      string         `json:"period"`
+	Users       []RankingUser  `json:"users"`
+	CurrentUser *RankingUser   `json:"current_user,omitempty"`
+	Billing     RankingBilling `json:"billing"`
+	UpdatedAt   time.Time      `json:"updated_at,omitempty"`
+}
+
+func (ranking UserRanking) FindUser(userID int64) (RankingUser, bool) {
+	if ranking.CurrentUser != nil && (userID <= 0 || ranking.CurrentUser.UserID == userID) {
+		return *ranking.CurrentUser, true
+	}
+	for _, user := range ranking.Users {
+		if user.UserID == userID {
+			return user, true
+		}
+	}
+	if ranking.CurrentUser != nil && userID <= 0 {
+		return *ranking.CurrentUser, true
+	}
+	return RankingUser{}, false
+}
+
 // MarshalJSON keeps native quota values out of any encoded output and emits
 // traceable Money snapshots only.
 func (usage UserUsage) MarshalJSON() ([]byte, error) {
@@ -217,12 +265,22 @@ type Prize struct {
 	Label       string `json:"label"`
 	ShortLabel  string `json:"shortLabel"`
 	Description string `json:"description"`
+	Grade       string `json:"grade"`
+	// QuotaAmount is the USD reward amount reported by the lottery API.
+	QuotaAmount   float64 `json:"quotaAmount"`
+	ValidityHours int     `json:"validityHours"`
 }
 
 type Effect struct {
-	Summary    string    `json:"summary"`
-	QuotaDelta float64   `json:"quotaDelta"`
-	ExpiresAt  time.Time `json:"expiresAt"`
+	Kind          string    `json:"kind"`
+	Headline      string    `json:"headline"`
+	Summary       string    `json:"summary"`
+	QuotaDelta    float64   `json:"quotaDelta"`
+	ExpiresAt     time.Time `json:"expiresAt"`
+	Grade         string    `json:"grade"`
+	AccessLabel   string    `json:"accessLabel"`
+	KeyLabel      string    `json:"keyLabel"`
+	ValidityHours int       `json:"validityHours"`
 }
 
 type DrawResult struct {
@@ -233,6 +291,19 @@ type DrawResult struct {
 	FulfillmentStatus  string `json:"fulfillmentStatus"`
 	FulfillmentMessage string `json:"fulfillmentMessage"`
 	Effect             Effect `json:"effect"`
+}
+
+// DrawHistoryEntry is the safe subset of a dashboard history item used by the
+// workbench. Internal wheel metadata and account balances are intentionally
+// ignored.
+type DrawHistoryEntry struct {
+	ID                 string    `json:"id"`
+	Prize              Prize     `json:"prize"`
+	Status             string    `json:"status"`
+	FulfillmentStatus  string    `json:"fulfillmentStatus"`
+	FulfillmentMessage string    `json:"fulfillmentMessage"`
+	Effect             Effect    `json:"effect"`
+	CreatedAt          time.Time `json:"createdAt"`
 }
 
 func (result DrawResult) Summary() state.DrawSummary {
@@ -277,8 +348,8 @@ func (c *Client) Sessions(ctx context.Context, parentAccessToken string) ([]Sess
 		return nil, fmt.Errorf("sessions request: %w", err)
 	}
 	var envelope struct {
-		Success *bool         `json:"success"`
-		Message string        `json:"message"`
+		Success *bool  `json:"success"`
+		Message string `json:"message"`
 		Data    []struct {
 			SID          string `json:"sid"`
 			Current      bool   `json:"current"`
@@ -905,6 +976,52 @@ func (c *Client) UserSelf(ctx context.Context, parentAccessToken string) (UserUs
 	return result, nil
 }
 
+// RankingsUsers returns the authenticated user's record for one ranking
+// period. The endpoint also returns a public user list; FindUser prefers the
+// explicit current_user record and falls back to matching that list by ID.
+func (c *Client) RankingsUsers(ctx context.Context, parentAccessToken string, userID int64, period string) (UserRanking, error) {
+	if strings.TrimSpace(parentAccessToken) == "" {
+		return UserRanking{}, errors.New("user rankings require a parent access token")
+	}
+	period = strings.TrimSpace(period)
+	if period == "" {
+		period = RankingPeriodToday
+	}
+	query := url.Values{}
+	query.Set("view", "users")
+	query.Set("period", period)
+	query.Set("sort_by", "tokens")
+	query.Set("expand", "channels")
+	query.Set("limit", "30")
+	request, err := c.newRequest(ctx, http.MethodGet, "/api/rankings/users?"+query.Encode(), nil)
+	if err != nil {
+		return UserRanking{}, err
+	}
+	request.Header.Set("Authorization", "Bearer "+strings.TrimSpace(parentAccessToken))
+	request.Header.Set("Referer", c.url("/rankings").String())
+	request.Header.Set("Cache-Control", "no-cache")
+	if userID > 0 {
+		request.Header.Set("X-Current-User-ID", strconv.FormatInt(userID, 10))
+	}
+
+	response, err := c.http.Do(request)
+	if err != nil {
+		return UserRanking{}, fmt.Errorf("user rankings request: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return UserRanking{}, responseError(response)
+	}
+	payload, err := io.ReadAll(io.LimitReader(response.Body, maxRankingBody))
+	if err != nil {
+		return UserRanking{}, fmt.Errorf("read user rankings response: %w", err)
+	}
+	if len(payload) == 0 {
+		return UserRanking{}, errors.New("empty user rankings response")
+	}
+	return decodeUserRanking(payload, period)
+}
+
 func (c *Client) postLotteryOperation(ctx context.Context, path, lotteryAccessToken, idempotencyKey, action string) (OperationResult, error) {
 	if strings.TrimSpace(lotteryAccessToken) == "" {
 		return OperationResult{}, fmt.Errorf("%s requires a lottery access token", action)
@@ -987,6 +1104,55 @@ func responseError(response *http.Response) error {
 		return &APIError{StatusCode: response.StatusCode, Message: safeMessage(payload.Message)}
 	}
 	return &APIError{StatusCode: response.StatusCode}
+}
+
+func decodeUserRanking(payload json.RawMessage, requestedPeriod string) (UserRanking, error) {
+	var envelope struct {
+		Success *bool           `json:"success"`
+		Message string          `json:"message"`
+		Data    json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		return UserRanking{}, fmt.Errorf("decode user rankings envelope: %w", err)
+	}
+	if envelope.Success != nil && !*envelope.Success {
+		return UserRanking{}, &APIError{StatusCode: http.StatusOK, Message: safeMessage(envelope.Message)}
+	}
+	data := envelope.Data
+	if len(data) == 0 || string(data) == "null" {
+		data = payload
+	}
+	var decoded struct {
+		Period      string          `json:"period"`
+		Users       []RankingUser   `json:"users"`
+		CurrentUser *RankingUser    `json:"current_user"`
+		Billing     RankingBilling  `json:"billing"`
+		UpdatedAt   json.RawMessage `json:"updated_at"`
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return UserRanking{}, fmt.Errorf("decode user rankings data: %w", err)
+	}
+	period := strings.TrimSpace(decoded.Period)
+	if period == "" {
+		period = requestedPeriod
+	}
+	updatedAt := parseExpiry(decoded.UpdatedAt)
+	if len(decoded.UpdatedAt) == 0 || string(decoded.UpdatedAt) == "null" {
+		updatedAt = time.Time{}
+	}
+	if decoded.Users == nil {
+		decoded.Users = []RankingUser{}
+	}
+	if decoded.CurrentUser == nil && len(decoded.Users) == 0 {
+		return UserRanking{}, errors.New("user rankings response did not contain any user record")
+	}
+	return UserRanking{
+		Period:      period,
+		Users:       decoded.Users,
+		CurrentUser: decoded.CurrentUser,
+		Billing:     decoded.Billing,
+		UpdatedAt:   updatedAt,
+	}, nil
 }
 
 func decodeDashboard(payload json.RawMessage) (Dashboard, error) {

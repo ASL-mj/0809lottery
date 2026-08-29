@@ -38,6 +38,21 @@ func TestQuotaPerUnitPolicyKeepsExactRemainder(t *testing.T) {
 	}
 }
 
+func TestQuotaPerUnitPolicyKeepsNonZeroSubCentDisplay(t *testing.T) {
+	amount, err := ParseNative("5")
+	if err != nil {
+		t.Fatalf("ParseNative() error = %v", err)
+	}
+	policy, err := NewQuotaPerUnitPolicy("500000")
+	if err != nil {
+		t.Fatalf("NewQuotaPerUnitPolicy() error = %v", err)
+	}
+	money := policy.Convert(amount, provenance)
+	if money.Value != "0.00001" || money.Display != "$0.00001" {
+		t.Fatalf("sub-cent money = %#v, want value 0.00001 and display $0.00001", money)
+	}
+}
+
 func TestQuotaPerUnitPolicyRejectsInvalidUnits(t *testing.T) {
 	for _, unit := range []string{"", "0", "-5", "abc", "1.5e3"} {
 		if _, err := NewQuotaPerUnitPolicy(unit); err == nil {

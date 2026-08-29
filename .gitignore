@@ -2,6 +2,7 @@
 lottery-bot.env
 *.local-overrides.env
 data/
+bin/
 
 # OS noise
 .DS_Store

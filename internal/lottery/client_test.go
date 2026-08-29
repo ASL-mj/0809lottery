@@ -1,8 +1,8 @@
 package lottery
 
 import (
-	"encoding/base64"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +12,27 @@ import (
 
 	"skyeapi/lottery-bot/internal/state"
 )
+
+func TestClientSendsConfiguredUserAgent(t *testing.T) {
+	const wantUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
+	var gotUserAgent string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		gotUserAgent = request.Header.Get("User-Agent")
+		_ = json.NewEncoder(writer).Encode(map[string]any{"eligibility": map[string]any{"remaining": 0}})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, wantUserAgent, nil)
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	if _, err := client.Dashboard(context.Background(), "token"); err != nil {
+		t.Fatalf("Dashboard() error = %v", err)
+	}
+	if gotUserAgent != wantUserAgent {
+		t.Fatalf("User-Agent = %q, want the confirmed macOS Chrome value", gotUserAgent)
+	}
+}
 
 func TestLoginBridgeAndDraw(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -157,7 +178,7 @@ func TestDashboardClaimAndCheckin(t *testing.T) {
 			if request.Method != http.MethodGet || request.Header.Get("Authorization") != "Bearer lottery-token" {
 				t.Fatalf("dashboard request = method=%s authorization=%q", request.Method, request.Header.Get("Authorization"))
 			}
-			_, _ = writer.Write([]byte(`{"eligibility":{"remaining":2,"spendBonusDraws":1}}`))
+			_, _ = writer.Write([]byte(`{"eligibility":{"remaining":2,"spendBonusDraws":1},"history":[{"id":"draw-1","status":"fulfilled","fulfillmentStatus":"active","fulfillmentMessage":"额度已到账","createdAt":"2026-08-05T12:00:00Z","prize":{"label":"小额额度丙","shortLabel":"小额额度丙","description":"限时额度即时生效","grade":"丙","quotaAmount":5,"validityHours":24},"effect":{"summary":"限时额度与订阅已生效","accessLabel":"福利订阅","quotaDelta":5,"expiresAt":"2026-08-06T12:00:00Z"}}]}`))
 		case "/lottery/api/check-ins/claim":
 			if request.Method != http.MethodPost || request.Header.Get("Authorization") != "Bearer lottery-token" {
 				t.Fatalf("claim request = method=%s authorization=%q", request.Method, request.Header.Get("Authorization"))
@@ -187,6 +208,9 @@ func TestDashboardClaimAndCheckin(t *testing.T) {
 	}
 	if bonus, ok := dashboard.SpendBonusDraws(); !ok || bonus != 1 {
 		t.Fatalf("Dashboard().SpendBonusDraws() = %d, %v", bonus, ok)
+	}
+	if len(dashboard.History) != 1 || dashboard.History[0].ID != "draw-1" || dashboard.History[0].Prize.ShortLabel != "小额额度丙" || dashboard.History[0].Prize.Description != "限时额度即时生效" || dashboard.History[0].Prize.Grade != "丙" || dashboard.History[0].Effect.AccessLabel != "福利订阅" || dashboard.History[0].Effect.QuotaDelta != 5 {
+		t.Fatalf("Dashboard().History = %#v", dashboard.History)
 	}
 	claim, err := client.ClaimDaily(context.Background(), "lottery-token")
 	if err != nil || !claim.Success || claim.Message != "领取成功" {
@@ -503,6 +527,53 @@ func TestUserSelfDecodesUsageEnvelope(t *testing.T) {
 	}
 }
 
+func TestRankingsUsersDecodesCurrentUserAndBilling(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/api/rankings/users" || request.Method != http.MethodGet {
+			t.Fatalf("rankings request = %s %s", request.Method, request.URL.Path)
+		}
+		if got := request.URL.Query(); got.Get("view") != "users" || got.Get("period") != "today" || got.Get("sort_by") != "tokens" || got.Get("expand") != "channels" || got.Get("limit") != "30" {
+			t.Fatalf("rankings query = %#v", got)
+		}
+		if request.Header.Get("Authorization") != "Bearer parent-token" || request.Header.Get("X-Current-User-ID") != "42" || request.Header.Get("Referer") != server.URL+"/rankings" {
+			t.Fatalf("rankings headers = authorization=%q current-user=%q referer=%q", request.Header.Get("Authorization"), request.Header.Get("X-Current-User-ID"), request.Header.Get("Referer"))
+		}
+		_, _ = writer.Write([]byte(`{"success":true,"data":{"period":"today","users":[{"user_id":42,"total_tokens":12345,"prompt_tokens":12000,"completion_tokens":345,"call_count":67,"total_quota":2500000}],"current_user":{"user_id":42,"total_tokens":12345,"prompt_tokens":12000,"completion_tokens":345,"call_count":67,"total_quota":2500000},"billing":{"currency":"USD","quota_per_unit":500000},"updated_at":1787976333}}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, "test-agent", nil)
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	ranking, err := client.RankingsUsers(context.Background(), "parent-token", 42, "today")
+	if err != nil {
+		t.Fatalf("RankingsUsers() error = %v", err)
+	}
+	user, ok := ranking.FindUser(42)
+	if !ok || user.TotalTokens != 12345 || user.CallCount != 67 || user.TotalQuota != 2500000 {
+		t.Fatalf("RankingsUsers().FindUser() = %#v, %v", user, ok)
+	}
+	if ranking.Billing.Currency != "USD" || ranking.Billing.QuotaPerUnit != 500000 || ranking.UpdatedAt.IsZero() {
+		t.Fatalf("RankingsUsers() billing/time = %#v", ranking)
+	}
+}
+
+func TestRankingsUsersRequiresCurrentRecord(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte(`{"success":true,"data":{"period":"today","users":[],"billing":{"currency":"USD","quota_per_unit":500000}}}`))
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, "test-agent", nil)
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	if _, err := client.RankingsUsers(context.Background(), "parent-token", 42, "today"); err == nil {
+		t.Fatal("RankingsUsers() error = nil, want missing-record validation")
+	}
+}
+
 func TestPurchaseDrawAndUnlockDrawLimit(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		expectedBaseURL := "http://" + request.Host
@@ -646,7 +717,6 @@ func TestSessionIDFromAccessToken(t *testing.T) {
 		}
 	}
 }
-
 
 func TestDescribeUserAgent(t *testing.T) {
 	cases := []struct{ ua, want string }{

@@ -1,6 +1,6 @@
 # 0809 多账号工作台
 
-这是一个受 HTTP Basic Auth 保护的本地 Web 页面，用于管理 0809 平台的多个账号。账号数量不再受固定环境变量限制，可以在工作台中自助新增、编辑、停用、重新认证和删除。每个账号的操作相互独立：一个账号会话失效不会遮蔽其他账号的结果，也不会产生跨账号统计。
+这是一个本地 0809 多账号工作台。浏览器访问时先在 /login 完成管理员认证，工作台使用本地短期会话 Cookie；脚本和健康检查也可以显式发送 HTTP Basic Auth。账号数量不再受固定环境变量限制，可以在工作台中自助新增、编辑、停用、重新认证和删除。每个账号的操作相互独立：一个账号会话失效不会遮蔽其他账号的结果，也不会产生跨账号统计。
 
 ## 功能
 
@@ -24,7 +24,7 @@
 
 平台的会话列表（`GET /api/user/sessions`）、定点撤销（`DELETE /api/user/sessions/{sid}`）与退出其他会话（`POST /api/user/sessions/revoke-others`）接口已由用户核实接入。登录/刷新后工作台从令牌的 `sid` 声明记录自己创建的会话台账。「会话清理」对话框展示实时会话列表（含登录方式、IP、解析后的设备摘要；原始 UA 不出服务端），撤销完全由用户手动决定：每个会话一个撤销按钮，顶部提供「退出其他所有会话」。撤销当前会话后账号标记为需要重新认证。显式登录前若达到容量阈值，工作台先自动清理台账能证明的旧工作台会话，仍不足时拒绝登录并给出指引；无法核实容量（令牌已失效）时放行登录，避免把账号锁死。
 
-密码、Cookie、令牌保存在 AES-256-GCM 加密的 Vault 文件中（每次写入使用新随机 nonce，原子落盘，文件 0600、目录 0700）。账号注册表只保存脱敏元数据：显示名、掩码登录名（如 `u***@example.test`）、启用状态与认证健康状态。所有变更接口受 Basic Auth、同源校验与 CSRF 令牌（`X-CSRF-Token` 双提交）保护。
+密码、Cookie、令牌保存在 AES-256-GCM 加密的 Vault 文件中（每次写入使用新随机 nonce，原子落盘，文件 0600、目录 0700）。账号注册表只保存脱敏元数据：显示名、掩码登录名（如 u***@example.test）、启用状态与认证健康状态。管理员登录只建立本地工作台会话，不会触发 0809 平台登录；所有变更接口受本地会话（或显式 Basic Auth）、同源校验与 CSRF 令牌（X-CSRF-Token 双提交）保护。
 
 ## 配置
 
@@ -46,8 +46,10 @@
 
 ## 运行
 
+在项目目录中使用 Makefile 启动。默认只读取项目内的 `lottery-bot.env`、`data/state.json` 和 `data/vault.json`；Makefile 会拒绝指向其他目录的 `ENV_FILE`。
+
 ```bash
-./lottery-bot serve
+make run
 ```
 
 默认监听 `127.0.0.1:18090`。部署前运行：
@@ -58,9 +60,12 @@ go test ./...
 
 ## Web API
 
-所有接口均要求 HTTP Basic Auth；写接口还要求同源与 `X-CSRF-Token`（页面 `GET /` 下发的 Cookie 值）。
+浏览器接口使用 GET /login 建立本地管理员会话；脚本可显式发送 HTTP Basic Auth。写接口还要求同源与 X-CSRF-Token（GET /login 或 GET / 下发的 Cookie 值）。
 
-- `GET /`：多账号工作台页面（下发 CSRF Cookie）。
+- GET /login：管理员登录页面（公开访问并下发 CSRF Cookie）。
+- POST /api/admin/login：校验管理员凭据并建立本地工作台会话。
+- POST /api/admin/logout：撤销当前本地工作台会话。
+- GET /：多账号工作台页面（需要本地会话或显式 Basic Auth）。
 - `GET /api/health`：服务健康检查。
 - `GET /api/accounts`：账号卡片列表（脱敏元数据 + 认证健康 + 业务快照）。
 - `POST /api/accounts`：新增账号（`label`、`login_name`、`password`），仅写入 Vault，不触发登录。
@@ -75,10 +80,12 @@ go test ./...
 - `POST /api/accounts/{account_id}/checkin`：每日签到。
 - `POST /api/accounts/{account_id}/claim`：领取每日赠送抽奖次数（不自动抽奖）。
 - `POST /api/accounts/{account_id}/draw`：手动抽奖一次。
+- `POST /api/accounts/{account_id}/draw-history`：读取平台 `lottery/api/dashboard` 返回的最近中奖记录（仅返回脱敏的奖品、状态、时间与美元额度）。
 - `POST /api/accounts/{account_id}/activity`：刷新活动信息。
 - `POST /api/accounts/{account_id}/purchase-draw`：购买一次抽奖（价格来自实时活动信息）。
 - `POST /api/accounts/{account_id}/unlock-pass`：购买当日通行证。
 - `POST /api/accounts/{account_id}/balance`：查询账户余额（剩余/已用额度与请求次数）。
+- `POST /api/accounts/{account_id}/token-usage`：查询当日消耗 Token、调用次数与美元额度（复用已有会话）。
 - `GET|PUT /api/accounts/{account_id}/draw-schedule`：读取或整体替换该账号的定时抽奖计划列表（`fixed` 指定时刻 / `random` 时段随机）。
 - `POST /api/draw-count/query`、`POST /api/subscriptions/query`：单账号只读查询。
 - `GET /api/auto-draw-status`、`GET /api/runtime-logs`：当日计划状态（含自定义计划标签）与脱敏运行日志。

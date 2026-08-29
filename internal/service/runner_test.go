@@ -37,6 +37,7 @@ type fakeClient struct {
 	checkinEligibilityCalls int
 	statusCalls             int
 	userSelfCalls           int
+	rankingsCalls           int
 	drawTokens              []string
 	drawKeys                []string
 	purchaseTokens          []string
@@ -71,6 +72,11 @@ type fakeClient struct {
 	userSelfTokens          []string
 	userSelfErrs            []error
 	userUsage               lottery.UserUsage
+	rankings                []lottery.UserRanking
+	rankingErrs             []error
+	rankingTokens           []string
+	rankingUserIDs          []int64
+	rankingPeriods          []string
 	subscriptionPlans       map[int]string
 	subscriptionSelf        lottery.SubscriptionSelf
 	status                  lottery.StatusSettings
@@ -341,6 +347,23 @@ func (f *fakeClient) UserSelf(_ context.Context, token string) (lottery.UserUsag
 		return lottery.UserUsage{}, f.subscriptionErr
 	}
 	return f.userUsage, nil
+}
+
+func (f *fakeClient) RankingsUsers(_ context.Context, token string, userID int64, period string) (lottery.UserRanking, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rankingsCalls++
+	f.rankingTokens = append(f.rankingTokens, token)
+	f.rankingUserIDs = append(f.rankingUserIDs, userID)
+	f.rankingPeriods = append(f.rankingPeriods, period)
+	index := f.rankingsCalls - 1
+	if index < len(f.rankingErrs) && f.rankingErrs[index] != nil {
+		return lottery.UserRanking{}, f.rankingErrs[index]
+	}
+	if index < len(f.rankings) {
+		return f.rankings[index], nil
+	}
+	return lottery.UserRanking{}, errors.New("missing fake user ranking result")
 }
 
 func (f *fakeClient) SubscriptionPlans(_ context.Context, _ string) (map[int]string, error) {
@@ -788,6 +811,42 @@ func TestRunnerQueryUsageStoresSanitizedSnapshot(t *testing.T) {
 	}
 }
 
+func TestRunnerQueryTokenUsageStoresDailyUSDReport(t *testing.T) {
+	store := testStore(t)
+	defer store.Close()
+	now := time.Date(2026, time.August, 29, 14, 0, 0, 0, shanghaiLocation)
+	if err := store.PutAuth("account-a", state.AuthState{
+		UserID:                42,
+		ParentAccessToken:     "parent-token",
+		ParentAccessExpiresAt: now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("PutAuth() error = %v", err)
+	}
+	current := lottery.RankingUser{UserID: 42, TotalTokens: 12345, PromptTokens: 12000, CompletionTokens: 345, CallCount: 67, TotalQuota: 2500000}
+	client := &fakeClient{rankings: []lottery.UserRanking{{
+		Period:      "today",
+		CurrentUser: &current,
+		Billing:     lottery.RankingBilling{Currency: "USD", QuotaPerUnit: 500000},
+		UpdatedAt:   now.Add(-time.Minute),
+	}}}
+	runner := testRunner(t, store, client, now)
+
+	report, err := runner.QueryTokenUsage(context.Background(), "account-a")
+	if err != nil {
+		t.Fatalf("QueryTokenUsage() error = %v", err)
+	}
+	if report.AccountID != "account-a" || report.Period != "today" || report.DayKey != "2026-08-29" || report.TotalTokens != 12345 || report.CallCount != 67 || report.ConsumedQuotaUSD.Value != "5" || !report.QuotaConversionAvailable {
+		t.Fatalf("token usage report = %#v", report)
+	}
+	if client.rankingsCalls != 1 || len(client.rankingTokens) != 1 || client.rankingTokens[0] != "parent-token" || client.rankingUserIDs[0] != 42 || client.rankingPeriods[0] != lottery.RankingPeriodToday {
+		t.Fatalf("ranking request = calls=%d tokens=%#v ids=%#v periods=%#v", client.rankingsCalls, client.rankingTokens, client.rankingUserIDs, client.rankingPeriods)
+	}
+	snapshot, ok := store.Snapshot("account-a", "token-usage")
+	if !ok || !strings.Contains(string(snapshot.Data), "\"consumed_quota_usd\"") || strings.Contains(string(snapshot.Data), "\"total_quota\"") || strings.Contains(string(snapshot.Data), "parent-token") {
+		t.Fatalf("token usage snapshot = %#v, %v", snapshot, ok)
+	}
+}
+
 func TestRunnerQueryActivityComputesSpendTierProgress(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
@@ -840,6 +899,84 @@ func TestRunnerQueryActivityComputesSpendTierProgress(t *testing.T) {
 				t.Fatalf("NextSpendRemainingUSD = %#v, want %v", report.NextSpendRemainingUSD, tc.wantRemaining)
 			}
 		})
+	}
+}
+
+func TestRunnerQueryDrawHistoryStoresSanitizedProjection(t *testing.T) {
+	store := testStore(t)
+	defer store.Close()
+	now := time.Date(2026, time.August, 29, 14, 0, 0, 0, shanghaiLocation)
+	if err := store.PutAuth("account-a", state.AuthState{
+		LotteryAccessToken:     "lottery-token",
+		LotteryAccessExpiresAt: now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("PutAuth() error = %v", err)
+	}
+	created := now.Add(-time.Hour)
+	client := &fakeClient{dashboards: []lottery.Dashboard{{
+		Eligibility: lottery.DashboardEligibility{Remaining: intPointer(1)},
+		History: []lottery.DrawHistoryEntry{{
+			ID:                 "draw-history-1",
+			Status:             "fulfilled",
+			FulfillmentStatus:  "active",
+			FulfillmentMessage: "额度已到账",
+			CreatedAt:          created,
+			Prize:              lottery.Prize{Label: "小额额度丙 · 1 天 5 额度", ShortLabel: "小额额度丙", Description: "限时额度即时生效", Grade: "丙", QuotaAmount: 5, ValidityHours: 24},
+			Effect:             lottery.Effect{Summary: "限时额度与订阅已生效", AccessLabel: "福利订阅", QuotaDelta: 5, ExpiresAt: created.Add(24 * time.Hour)},
+		}},
+	}}}
+	runner := testRunner(t, store, client, now)
+
+	report, err := runner.QueryDrawHistory(context.Background(), "account-a")
+	if err != nil {
+		t.Fatalf("QueryDrawHistory() error = %v", err)
+	}
+	if report.AccountID != "account-a" || len(report.History) != 1 || report.History[0].PrizeShortLabel != "小额额度丙" || report.History[0].CreatedAt.IsZero() || report.History[0].QuotaDeltaUSD == nil {
+		t.Fatalf("draw history report = %#v", report)
+	}
+	if report.History[0].FulfillmentMessage != "额度已到账" || report.History[0].PrizeDescription != "限时额度即时生效" || report.History[0].PrizeGrade != "丙" || report.History[0].PrizeValidityHours != 24 || report.History[0].EffectSummary != "限时额度与订阅已生效" || report.History[0].EffectAccessLabel != "福利订阅" || report.History[0].ExpiresAt == nil {
+		t.Fatalf("draw history message = %q", report.History[0].FulfillmentMessage)
+	}
+	snapshot, ok := store.Snapshot("account-a", "draw-history")
+	if !ok || strings.Contains(string(snapshot.Data), "permanentBalance") || strings.Contains(string(snapshot.Data), "wheelIndex") {
+		t.Fatalf("draw history snapshot = ok=%v data=%s", ok, snapshot.Data)
+	}
+}
+
+func TestRunnerQueryDrawHistoryUsesPrizeQuotaWhenEffectDeltaMissing(t *testing.T) {
+	store := testStore(t)
+	defer store.Close()
+	now := time.Date(2026, time.August, 29, 14, 0, 0, 0, shanghaiLocation)
+	if err := store.PutAuth("account-a", state.AuthState{
+		LotteryAccessToken:     "lottery-token",
+		LotteryAccessExpiresAt: now.Add(time.Hour),
+		ParentAccessToken:      "parent-token",
+		ParentAccessExpiresAt:  now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("PutAuth() error = %v", err)
+	}
+	created := now.Add(-time.Hour)
+	client := &fakeClient{status: lottery.StatusSettings{QuotaPerUnit: 500}, dashboards: []lottery.Dashboard{{
+		Eligibility: lottery.DashboardEligibility{Remaining: intPointer(1)},
+		History: []lottery.DrawHistoryEntry{{
+			ID:        "draw-history-prize-fallback",
+			Status:    "fulfilled",
+			Prize:     lottery.Prize{ShortLabel: "小额额度丙", QuotaAmount: 5, ValidityHours: 24},
+			Effect:    lottery.Effect{ExpiresAt: created.Add(24 * time.Hour)},
+			CreatedAt: created,
+		}},
+	}}}
+	runner := testRunner(t, store, client, now)
+
+	report, err := runner.QueryDrawHistory(context.Background(), "account-a")
+	if err != nil {
+		t.Fatalf("QueryDrawHistory() error = %v", err)
+	}
+	if len(report.History) != 1 || report.History[0].QuotaDeltaUSD == nil {
+		t.Fatalf("draw history report = %#v", report)
+	}
+	if report.History[0].QuotaDeltaUSD.Value != "5" || report.History[0].QuotaDeltaUSD.Display != "$5.00" || report.History[0].QuotaDeltaUSD.Source != "draw.history.prize.quota_amount" || report.History[0].QuotaDeltaUSD.Formula != "already-usd-v1: usd = upstream usd value" {
+		t.Fatalf("quota money = %#v", report.History[0].QuotaDeltaUSD)
 	}
 }
 
