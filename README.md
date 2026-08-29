@@ -22,7 +22,7 @@
 
 平台存在约 50 个会话的数量上限。工作台通过可配置的会话上限（默认 50）、安全余量（默认 5）和持久会话保留数（默认 2，可配 1–3）做容量保护；仅在显式登录前检查容量。
 
-平台的会话列表（`GET /api/user/sessions`）与定点撤销（`DELETE /api/user/sessions/{sid}`）接口已由用户核实接入。登录/刷新后工作台从令牌的 `sid` 声明记录自己创建的会话台账；「会话清理」对话框展示实时会话列表（不含设备指纹），只有台账能证明由工作台创建、且非当前、非保留的会话会成为清理候选——其他设备（手机、浏览器）的会话永远不会被撤销，也绝不使用 `revoke-others` 全量撤销接口。显式登录前若达到容量阈值，工作台先清理可释放的工作台旧会话，仍不足时拒绝登录并给出指引；无法核实容量（令牌已失效）时放行登录，避免把账号锁死。
+平台的会话列表（`GET /api/user/sessions`）、定点撤销（`DELETE /api/user/sessions/{sid}`）与退出其他会话（`POST /api/user/sessions/revoke-others`）接口已由用户核实接入。登录/刷新后工作台从令牌的 `sid` 声明记录自己创建的会话台账。「会话清理」对话框展示实时会话列表（含登录方式、IP、解析后的设备摘要；原始 UA 不出服务端），撤销完全由用户手动决定：每个会话一个撤销按钮，顶部提供「退出其他所有会话」。撤销当前会话后账号标记为需要重新认证。显式登录前若达到容量阈值，工作台先自动清理台账能证明的旧工作台会话，仍不足时拒绝登录并给出指引；无法核实容量（令牌已失效）时放行登录，避免把账号锁死。
 
 密码、Cookie、令牌保存在 AES-256-GCM 加密的 Vault 文件中（每次写入使用新随机 nonce，原子落盘，文件 0600、目录 0700）。账号注册表只保存脱敏元数据：显示名、掩码登录名（如 `u***@example.test`）、启用状态与认证健康状态。所有变更接口受 Basic Auth、同源校验与 CSRF 令牌（`X-CSRF-Token` 双提交）保护。
 
@@ -68,8 +68,10 @@ go test ./...
 - `DELETE /api/accounts/{account_id}`：删除账号，请求体需 `{"confirmation":"DELETE"}`；先停用，再删除凭据与账号级业务数据。
 - `POST /api/accounts/{account_id}/validate`：只读认证检查，不创建会话。
 - `POST /api/accounts/{account_id}/reauthenticate`：显式重新认证，请求体需 `{"confirm":true}`。
-- `GET /api/accounts/{account_id}/session-preview`：实时会话列表与清理预览（仅暴露会话 ID、是否当前、是否工作台创建与最近活跃时间，不含设备指纹）。
-- `POST /api/accounts/{account_id}/sessions/cleanup`：清理可释放的工作台会话，请求体需 `{"confirm":true}`。
+- `GET /api/accounts/{account_id}/session-preview`：实时会话列表（会话 ID、是否当前、登录方式、IP、解析后的设备摘要与时间戳；原始 UA 不出服务端）。
+- `POST /api/accounts/{account_id}/sessions/revoke`：撤销指定会话（`{"sid":"..."}`）；撤销当前会话会标记账号需要重新认证。
+- `POST /api/accounts/{account_id}/sessions/revoke-others`：退出除当前会话外的所有设备（`{"confirm":true}`）。
+- `POST /api/accounts/{account_id}/sessions/cleanup`：仅撤销台账可证明的工作台旧会话（容量保护内部使用，UI 不做候选门控）。
 - `POST /api/accounts/{account_id}/checkin`：每日签到。
 - `POST /api/accounts/{account_id}/claim`：领取每日赠送抽奖次数（不自动抽奖）。
 - `POST /api/accounts/{account_id}/draw`：手动抽奖一次。

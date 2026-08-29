@@ -49,7 +49,8 @@ type PlatformClient interface {
 	Bridge(ctx context.Context, parentAccessToken string, userID int64) (lottery.BridgeResult, error)
 	Cookies() []state.Cookie
 	Sessions(ctx context.Context, parentAccessToken string) ([]lottery.SessionInfo, error)
-	RevokeSession(ctx context.Context, parentAccessToken, sid string) error
+	RevokeSession(ctx context.Context, parentAccessToken, sid string) (lottery.RevokeSessionResult, error)
+	RevokeOtherSessions(ctx context.Context, parentAccessToken string) (int, error)
 }
 
 // ClientFactory builds a platform client seeded with the account's cookies.

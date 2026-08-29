@@ -116,6 +116,7 @@
     .account-dialog input { font:inherit; padding:8px 10px; border:1px solid var(--line-strong); border-radius:5px; }
     .account-dialog .dialog-error { color:var(--error); font-size:12px; min-height:16px; margin:0; }
     .account-dialog__row { display:flex; gap:8px; justify-content:flex-end; }
+    .account-dialog__row--start { justify-content:flex-start; margin-bottom:10px; }
     .preview-state { color:var(--muted); font-size:13px; margin-bottom:8px; }
     .preview-dialog ul { margin:0; padding-left:18px; color:var(--ink); font-size:13px; }
     .preview-sessions { list-style:none; margin:0 0 12px; padding:0; display:grid; gap:6px; }
@@ -1020,15 +1021,17 @@
     function renderSessionPreview(preview) {
       if (!preview) return '<div class="preview-state">会话预览不可用。</div>';
       if (preview.capability === 'unsupported') {
-        return '<div class="preview-state">远端会话清理不可用：平台会话查询与撤销接口尚未确认。</div>';
+        return '<div class="preview-state">远端会话管理不可用：平台会话接口尚未确认。</div>';
       }
+      const accountID = previewDialog.dataset.accountId;
       const rows = (preview.sessions || []).map((item) => {
-        const badge = item.current ? '当前会话' : item.workbench_owned ? (item.verdict === 'candidate' ? '可清理' : '工作台保留') : '其他设备';
+        const badge = item.current ? '当前会话' : item.workbench_owned ? '工作台' : '其他设备';
         const line1 = [escapeHTML(item.device || '未知设备'), item.ip ? escapeHTML(item.ip) : '', item.login_method ? escapeHTML(item.login_method) : ''].filter(Boolean).join(' · ');
         const line2 = [`SID ${escapeHTML(item.sid || '')}`, item.created_at ? `登录于 ${formatTime(item.created_at)}` : '', item.last_active_at ? `活跃 ${formatTime(item.last_active_at)}` : '', item.expires_at ? `过期 ${formatTime(item.expires_at)}` : ''].filter(Boolean).join(' · ');
-        return `<li class="sess-row"><div class="sess-row__head"><span class="sess-badge${item.verdict === 'candidate' ? ' sess-badge--danger' : ''}${item.current ? ' sess-badge--current' : ''}">${escapeHTML(badge)}</span><span class="sess-device">${line1}</span></div><div class="sess-row__meta">${line2}</div></li>`;
+        return `<li class="sess-row"><div class="sess-row__head"><span class="sess-badge${item.current ? ' sess-badge--current' : ''}">${escapeHTML(badge)}</span><span class="sess-device">${line1}</span><button class="action action--compact action--danger" type="button" data-session-revoke="${escapeHTML(accountID)}" data-sid="${escapeHTML(item.sid || '')}" data-current="${item.current ? '1' : '0'}">撤销</button></div><div class="sess-row__meta">${line2}</div></li>`;
       }).join('');
-      return `<div class="preview-state">平台共 ${toNumber(preview.total_known)} 个会话，工作台可安全清理 ${toNumber(preview.candidate_count)} 个。当前会话、其他设备会话与保留会话永远不会被清理。</div><ul class="preview-sessions">${rows}</ul><div class="account-dialog__row"><button class="action action--danger" type="button" data-session-cleanup ${toNumber(preview.candidate_count) ? '' : 'disabled'}>清理可释放会话</button></div>`;
+      const list = rows ? `<ul class="preview-sessions">${rows}</ul>` : '<p class="auto-draw__empty">当前没有在线会话。</p>';
+      return `<div class="preview-state">平台共 ${toNumber(preview.total_known)} 个会话。撤销当前会话后需要重新认证；其他会话撤销后对应设备将退出登录。</div><div class="account-dialog__row account-dialog__row--start"><button class="action action--danger" type="button" data-session-revoke-others>退出其他所有会话</button></div>${list}`;
     }
     function openDialog(dialog) { if (typeof dialog.showModal === 'function') dialog.showModal(); else dialog.setAttribute('open', ''); }
     function closeDialog(dialog) { dialog.close ? dialog.close() : dialog.removeAttribute('open'); }
@@ -1100,20 +1103,48 @@
     document.querySelector('#delete-dialog-cancel').addEventListener('click', () => closeDialog(deleteDialog));
     document.querySelector('#preview-dialog-close').addEventListener('click', () => closeDialog(previewDialog));
     previewDialog.addEventListener('click', async (event) => {
-      const button = event.target.closest('[data-session-cleanup]');
-      if (!button) return;
+      const othersButton = event.target.closest('[data-session-revoke-others]');
+      const revokeButton = event.target.closest('[data-session-revoke]');
+      if (!othersButton && !revokeButton) return;
       const accountID = previewDialog.dataset.accountId;
+      const account = findAccount(accountID);
       const errorNode = document.querySelector('#preview-dialog-error');
       errorNode.textContent = '';
-      button.disabled = true;
+      if (othersButton) {
+        if (!window.confirm('将退出除当前会话外的所有设备，确定继续？')) return;
+        othersButton.disabled = true;
+        try {
+          const result = await request(`/api/accounts/${encodeURIComponent(accountID)}/sessions/revoke-others`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirm: true }) });
+          errorNode.textContent = `已退出 ${result.revoked.length} 个其他会话`;
+          const payload = await request(`/api/accounts/${encodeURIComponent(accountID)}/session-preview`);
+          document.querySelector('#preview-dialog-body').innerHTML = renderSessionPreview(payload.preview);
+        } catch (error) {
+          errorNode.textContent = error.message;
+          othersButton.disabled = false;
+        }
+        return;
+      }
+      const sid = revokeButton.dataset.sid;
+      if (revokeButton.dataset.current === '1') {
+        if (!window.confirm('这是当前会话，撤销后工作台需要重新认证才能继续操作。确定撤销？')) return;
+      } else if (!window.confirm('确定撤销该会话？对应设备将退出登录。')) {
+        return;
+      }
+      revokeButton.disabled = true;
       try {
-        const result = await request(`/api/accounts/${encodeURIComponent(accountID)}/sessions/cleanup`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirm: true }) });
-        errorNode.textContent = `已撤销 ${result.revoked.length} 个会话${result.failed.length ? `，失败 ${result.failed.length} 个` : ''}`;
+        const result = await request(`/api/accounts/${encodeURIComponent(accountID)}/sessions/revoke`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sid }) });
+        if (result.current_revoked) {
+          if (account) account.auth_health = 'needs_reauth';
+          closeDialog(previewDialog);
+          setFooter(account, '当前会话已撤销，请重新认证后继续', 'error');
+          render();
+          return;
+        }
         const payload = await request(`/api/accounts/${encodeURIComponent(accountID)}/session-preview`);
         document.querySelector('#preview-dialog-body').innerHTML = renderSessionPreview(payload.preview);
       } catch (error) {
         errorNode.textContent = error.message;
-        button.disabled = false;
+        revokeButton.disabled = false;
       }
     });
     function handleManagementAction(button) {

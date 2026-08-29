@@ -254,11 +254,11 @@ func (s *Server) handleAccountActions(writer http.ResponseWriter, request *http.
 		return
 	}
 	action := parts[3]
-	if len(parts) == 5 && parts[3] == "sessions" {
-		action = action + "/" + parts[4]
+	if len(parts) >= 5 && parts[3] == "sessions" {
+		action = action + "/" + strings.Join(parts[4:], "/")
 	}
 	switch action {
-	case "checkin", "claim", "draw", "activity", "purchase-draw", "unlock-pass", "reauthenticate", "validate", "balance", "sessions/cleanup":
+	case "checkin", "claim", "draw", "activity", "purchase-draw", "unlock-pass", "reauthenticate", "validate", "balance", "sessions/cleanup", "sessions/revoke", "sessions/revoke-others":
 		if request.Method != http.MethodPost {
 			writeError(writer, http.StatusMethodNotAllowed, "请求方法不支持")
 			return
@@ -305,6 +305,10 @@ func (s *Server) handleAccountActions(writer http.ResponseWriter, request *http.
 		s.handleSessionPreview(writer, request, record)
 	case "sessions/cleanup":
 		s.handleSessionCleanup(writer, request, record)
+	case "sessions/revoke":
+		s.handleSessionRevoke(writer, request, record)
+	case "sessions/revoke-others":
+		s.handleSessionRevokeOthers(writer, request, record)
 	case "draw-schedule":
 		if request.Method == http.MethodGet {
 			s.handleDrawScheduleGet(writer, request, record)
@@ -606,6 +610,97 @@ func (s *Server) handleSessionPreview(writer http.ResponseWriter, request *http.
 
 type sessionCleanupRequest struct {
 	Confirm bool `json:"confirm"`
+}
+
+type sessionRevokeRequest struct {
+	SID string `json:"sid"`
+}
+
+// handleSessionRevoke revokes one session at the user's explicit request. If
+// it was the current session the workbench marks the account as needing
+// reauthentication.
+func (s *Server) handleSessionRevoke(writer http.ResponseWriter, request *http.Request, record account.Record) {
+	var input sessionRevokeRequest
+	if err := decodeRequest(writer, request, &input); err != nil {
+		writeError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
+	input.SID = strings.TrimSpace(input.SID)
+	if input.SID == "" {
+		writeError(writer, http.StatusBadRequest, "撤销会话需要提供 sid")
+		return
+	}
+	s.revokeSessions(writer, request, record, func(ctx context.Context, manager *auth.PlatformSessionManager) (map[string]interface{}, error) {
+		outcome, err := manager.RevokeOne(ctx, record.ID, input.SID)
+		if err != nil {
+			return nil, err
+		}
+		if outcome.Current {
+			if store, storeErr := s.sharedStore(); storeErr == nil {
+				_ = store.SetAuthHealth(record.ID, account.AuthNeedsReauth)
+			}
+		}
+		return map[string]interface{}{
+			"account_id":      record.ID,
+			"revoked_sid":     input.SID,
+			"current_revoked": outcome.Current,
+		}, nil
+	})
+}
+
+// handleSessionRevokeOthers revokes every session except the current one.
+func (s *Server) handleSessionRevokeOthers(writer http.ResponseWriter, request *http.Request, record account.Record) {
+	var input sessionCleanupRequest
+	if err := decodeRequest(writer, request, &input); err != nil {
+		writeError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
+	if !input.Confirm {
+		writeError(writer, http.StatusBadRequest, "退出其他所有会话需要显式确认字段 confirm=true")
+		return
+	}
+	s.revokeSessions(writer, request, record, func(ctx context.Context, manager *auth.PlatformSessionManager) (map[string]interface{}, error) {
+		result, err := manager.RevokeAllOthers(ctx, record.ID)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]interface{}{
+			"account_id": record.ID,
+			"revoked":    result.Revoked,
+			"failed":     result.Failed,
+		}, nil
+	})
+}
+
+// revokeSessions runs one revocation flow under the account's auth lock with
+// uniform error handling.
+func (s *Server) revokeSessions(writer http.ResponseWriter, request *http.Request, record account.Record, run func(context.Context, *auth.PlatformSessionManager) (map[string]interface{}, error)) {
+	guard, err := s.sharedGuard()
+	if err != nil {
+		writeStoreError(writer, err)
+		return
+	}
+	manager, ok := guard.Manager().(*auth.PlatformSessionManager)
+	if !ok {
+		writeError(writer, http.StatusConflict, "远端会话管理不可用：平台会话接口尚未确认")
+		return
+	}
+	store, err := s.sharedStore()
+	if err != nil {
+		writeStoreError(writer, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), 60*time.Second)
+	defer cancel()
+	release := store.LockAuth(record.ID)
+	defer release()
+	payload, err := run(ctx, manager)
+	if err != nil {
+		log.Printf("session revoke failed for account=%s: %v", record.ID, err)
+		writeError(writer, http.StatusBadGateway, "会话撤销暂时失败：认证可能已失效，请先重新认证")
+		return
+	}
+	writeJSON(writer, http.StatusOK, payload)
 }
 
 // handleSessionCleanup revokes the current cleanup candidates after an

@@ -183,11 +183,16 @@ func TestAccountViewsNeverExposeRawLogins(t *testing.T) {
 func TestSessionPreviewAndCleanupEndpoints(t *testing.T) {
 	// A platform fake that answers the sessions listing.
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/api/user/sessions" {
+		switch {
+		case request.URL.Path == "/api/user/sessions" && request.Method == http.MethodGet:
+			_, _ = writer.Write([]byte(`{"success":true,"data":[{"sid":"sid-current","current":true,"login_method":"password","ip":"111.32.43.207","user_agent":"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36","last_active_at":1787954325},{"sid":"sid-phone","current":false,"ip":"111.32.43.208","user_agent":"Mozilla/5.0 (iPhone; CPU iPhone OS 26_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/151.0.7922.112 Mobile/15E148 Safari/604.1","last_active_at":1787954300}]}`))
+		case request.URL.Path == "/api/user/sessions/sid-phone" && request.Method == http.MethodDelete:
+			_, _ = writer.Write([]byte(`{"success":true,"data":{"current":false,"revoked_sid":"sid-phone"}}`))
+		case request.URL.Path == "/api/user/sessions/revoke-others" && request.Method == http.MethodPost:
+			_, _ = writer.Write([]byte(`{"success":true,"data":{"revoked_count":0}}`))
+		default:
 			http.NotFound(writer, request)
-			return
 		}
-		_, _ = writer.Write([]byte(`{"success":true,"data":[{"sid":"sid-current","current":true,"login_method":"password","ip":"111.32.43.207","user_agent":"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36","last_active_at":1787954325},{"sid":"sid-phone","current":false,"ip":"111.32.43.208","user_agent":"Mozilla/5.0 (iPhone; CPU iPhone OS 26_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/151.0.7922.112 Mobile/15E148 Safari/604.1","last_active_at":1787954300}]}`))
 	}))
 	defer upstream.Close()
 
@@ -242,5 +247,29 @@ func TestSessionPreviewAndCleanupEndpoints(t *testing.T) {
 	}
 	if !strings.Contains(cleanup.Body.String(), `"revoked":[]`) {
 		t.Fatalf("cleanup response = %s", cleanup.Body.String())
+	}
+
+	missingSid := httptest.NewRecorder()
+	server.Handler().ServeHTTP(missingSid, authenticatedJSONRequest(http.MethodPost, "/api/accounts/account-a/sessions/revoke", `{}`))
+	if missingSid.Code != http.StatusBadRequest {
+		t.Fatalf("revoke without sid status = %d, want 400", missingSid.Code)
+	}
+
+	revoke := httptest.NewRecorder()
+	server.Handler().ServeHTTP(revoke, authenticatedJSONRequest(http.MethodPost, "/api/accounts/account-a/sessions/revoke", `{"sid":"sid-phone"}`))
+	if revoke.Code != http.StatusOK {
+		t.Fatalf("revoke status = %d: %s", revoke.Code, revoke.Body.String())
+	}
+	if !strings.Contains(revoke.Body.String(), `"revoked_sid":"sid-phone"`) || !strings.Contains(revoke.Body.String(), `"current_revoked":false`) {
+		t.Fatalf("revoke response = %s", revoke.Body.String())
+	}
+
+	others := httptest.NewRecorder()
+	server.Handler().ServeHTTP(others, authenticatedJSONRequest(http.MethodPost, "/api/accounts/account-a/sessions/revoke-others", `{"confirm":true}`))
+	if others.Code != http.StatusOK {
+		t.Fatalf("revoke-others status = %d: %s", others.Code, others.Body.String())
+	}
+	if !strings.Contains(others.Body.String(), `"revoked":`) {
+		t.Fatalf("revoke-others response = %s", others.Body.String())
 	}
 }

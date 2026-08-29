@@ -315,18 +315,25 @@ func (c *Client) Sessions(ctx context.Context, parentAccessToken string) ([]Sess
 	return sessions, nil
 }
 
+// RevokeSessionResult echoes the platform's response: whether the revoked
+// session was the current one, and its stable ID.
+type RevokeSessionResult struct {
+	Current    bool
+	RevokedSID string
+}
+
 // RevokeSession revokes exactly one session by its stable ID. The platform
 // echoes the revoked sid and whether it was the current session.
-func (c *Client) RevokeSession(ctx context.Context, parentAccessToken, sid string) error {
+func (c *Client) RevokeSession(ctx context.Context, parentAccessToken, sid string) (RevokeSessionResult, error) {
 	if strings.TrimSpace(parentAccessToken) == "" {
-		return errors.New("revoke session requires a parent access token")
+		return RevokeSessionResult{}, errors.New("revoke session requires a parent access token")
 	}
 	if strings.TrimSpace(sid) == "" {
-		return errors.New("revoke session requires a session ID")
+		return RevokeSessionResult{}, errors.New("revoke session requires a session ID")
 	}
 	request, err := c.newRequest(ctx, http.MethodDelete, "/api/user/sessions/"+url.PathEscape(strings.TrimSpace(sid)), nil)
 	if err != nil {
-		return err
+		return RevokeSessionResult{}, err
 	}
 	request.Header.Set("Authorization", "Bearer "+strings.TrimSpace(parentAccessToken))
 	request.Header.Set("Origin", c.baseURL.String())
@@ -334,11 +341,11 @@ func (c *Client) RevokeSession(ctx context.Context, parentAccessToken, sid strin
 
 	response, err := c.http.Do(request)
 	if err != nil {
-		return fmt.Errorf("revoke session request: %w", err)
+		return RevokeSessionResult{}, fmt.Errorf("revoke session request: %w", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return responseError(response)
+		return RevokeSessionResult{}, responseError(response)
 	}
 	var envelope struct {
 		Success *bool `json:"success"`
@@ -348,12 +355,50 @@ func (c *Client) RevokeSession(ctx context.Context, parentAccessToken, sid strin
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(response.Body).Decode(&envelope); err != nil {
-		return fmt.Errorf("decode revoke session response: %w", err)
+		return RevokeSessionResult{}, fmt.Errorf("decode revoke session response: %w", err)
 	}
 	if envelope.Success != nil && !*envelope.Success {
-		return &APIError{StatusCode: response.StatusCode, Message: safeMessage("")}
+		return RevokeSessionResult{}, &APIError{StatusCode: response.StatusCode, Message: safeMessage("")}
 	}
-	return nil
+	return RevokeSessionResult{Current: envelope.Data.Current, RevokedSID: envelope.Data.RevokedSID}, nil
+}
+
+// RevokeOtherSessions revokes every session except the current one
+// (POST /api/user/sessions/revoke-others). It reports how many sessions the
+// platform revoked.
+func (c *Client) RevokeOtherSessions(ctx context.Context, parentAccessToken string) (int, error) {
+	if strings.TrimSpace(parentAccessToken) == "" {
+		return 0, errors.New("revoke-others requires a parent access token")
+	}
+	request, err := c.newRequest(ctx, http.MethodPost, "/api/user/sessions/revoke-others", nil)
+	if err != nil {
+		return 0, err
+	}
+	request.Header.Set("Authorization", "Bearer "+strings.TrimSpace(parentAccessToken))
+	request.Header.Set("Origin", c.baseURL.String())
+	request.Header.Set("Referer", c.url("/profile").String())
+
+	response, err := c.http.Do(request)
+	if err != nil {
+		return 0, fmt.Errorf("revoke-others request: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return 0, responseError(response)
+	}
+	var envelope struct {
+		Success *bool `json:"success"`
+		Data    struct {
+			RevokedCount int `json:"revoked_count"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&envelope); err != nil {
+		return 0, fmt.Errorf("decode revoke-others response: %w", err)
+	}
+	if envelope.Success != nil && !*envelope.Success {
+		return 0, &APIError{StatusCode: response.StatusCode, Message: safeMessage("")}
+	}
+	return envelope.Data.RevokedCount, nil
 }
 
 func unixOrZero(seconds int64) time.Time {

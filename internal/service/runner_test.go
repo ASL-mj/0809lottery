@@ -379,7 +379,11 @@ func (f *fakeClient) Sessions(context.Context, string) ([]lottery.SessionInfo, e
 	return nil, nil
 }
 
-func (f *fakeClient) RevokeSession(context.Context, string, string) error { return nil }
+func (f *fakeClient) RevokeSession(context.Context, string, string) (lottery.RevokeSessionResult, error) {
+	return lottery.RevokeSessionResult{}, nil
+}
+
+func (f *fakeClient) RevokeOtherSessions(context.Context, string) (int, error) { return 0, nil }
 
 func TestRunnerDashboardReusesLotteryToken(t *testing.T) {
 	store := testStore(t)

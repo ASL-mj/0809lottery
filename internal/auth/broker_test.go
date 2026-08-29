@@ -57,10 +57,14 @@ type fakePlatform struct {
 	bridgeCalls    int
 	sessionsCalls  int
 	revokeCalls    int
-	sessionsResult []lottery.SessionInfo
-	sessionsErr    error
-	revokedSIDs    []string
-	revokeErrs     map[string]error
+	sessionsResult    []lottery.SessionInfo
+	sessionsErr       error
+	revokedSIDs       []string
+	revokeErrs        map[string]error
+	revokeCurrent     bool
+	revokeOthersCalls int
+	revokeOthersCount int
+	revokeOthersErr   error
 	userSelfErrs   []error
 	refreshResults []lottery.LoginResult
 	refreshErrs    []error
@@ -156,17 +160,24 @@ func (f *fakePlatform) Sessions(_ context.Context, _ string) ([]lottery.SessionI
 	return append([]lottery.SessionInfo(nil), f.sessionsResult...), nil
 }
 
-func (f *fakePlatform) RevokeSession(_ context.Context, _, sid string) error {
+func (f *fakePlatform) RevokeSession(_ context.Context, _, sid string) (lottery.RevokeSessionResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.revokeCalls++
 	if f.revokeErrs != nil {
 		if err, ok := f.revokeErrs[sid]; ok {
-			return err
+			return lottery.RevokeSessionResult{}, err
 		}
 	}
 	f.revokedSIDs = append(f.revokedSIDs, sid)
-	return nil
+	return lottery.RevokeSessionResult{Current: f.revokeCurrent, RevokedSID: sid}, nil
+}
+
+func (f *fakePlatform) RevokeOtherSessions(context.Context, string) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.revokeOthersCalls++
+	return f.revokeOthersCount, f.revokeOthersErr
 }
 
 type brokerHarness struct {

@@ -625,8 +625,9 @@ func TestSessionsAndRevokeSession(t *testing.T) {
 	if sessions[0].IP != "111.32.43.207" || DescribeUserAgent(sessions[0].UserAgent) != "Chrome 151 · macOS" {
 		t.Fatalf("device details = %#v", sessions[0])
 	}
-	if err := client.RevokeSession(context.Background(), "parent-token", "5bbd5956"); err != nil {
-		t.Fatalf("RevokeSession() error = %v", err)
+	result, err := client.RevokeSession(context.Background(), "parent-token", "5bbd5956")
+	if err != nil || result.RevokedSID != "5bbd5956" || result.Current {
+		t.Fatalf("RevokeSession() = %#v, %v", result, err)
 	}
 	if revokePath != "/api/user/sessions/5bbd5956" || revokeToken != "Bearer parent-token" {
 		t.Fatalf("revoke request = %s %q", revokePath, revokeToken)

@@ -471,7 +471,7 @@ func (m *PlatformSessionManager) Cleanup(ctx context.Context, accountID string) 
 	toRevoke := candidatePool[keep:]
 
 	for _, entry := range toRevoke {
-		if err := client.RevokeSession(ctx, bundle.ParentAccessToken, entry.RemoteID); err != nil {
+		if _, err := client.RevokeSession(ctx, bundle.ParentAccessToken, entry.RemoteID); err != nil {
 			result.Failed = append(result.Failed, FailedRevocation{SID: entry.RemoteID, Reason: safeReason(err)})
 			continue
 		}
@@ -511,4 +511,90 @@ func safeReason(err error) string {
 		return message[:120]
 	}
 	return message
+}
+
+
+// SessionRevokeOutcome reports a manual single-session revocation. Current
+// being true means the workbench's own session was revoked and the account
+// needs explicit reauthentication before further platform calls.
+type SessionRevokeOutcome struct {
+	Current       bool `json:"current"`
+	LedgerUpdated bool `json:"ledger_updated"`
+}
+
+// RevokeOne revokes one session at the user's explicit request, whatever its
+// origin. The ledger drops the entry and a revoked current session marks the
+// account as needing reauthentication.
+func (m *PlatformSessionManager) RevokeOne(ctx context.Context, accountID, sid string) (SessionRevokeOutcome, error) {
+	outcome := SessionRevokeOutcome{}
+	bundle, err := m.vault.Load(ctx, accountID)
+	if err != nil {
+		return outcome, err
+	}
+	client, err := m.newClient(cookiesToState(bundle.Cookies))
+	if err != nil {
+		return outcome, err
+	}
+	result, err := client.RevokeSession(ctx, bundle.ParentAccessToken, sid)
+	if err != nil {
+		return outcome, err
+	}
+	outcome.Current = result.Current || lottery.SessionIDFromAccessToken(bundle.ParentAccessToken) == strings.TrimSpace(sid)
+
+	removed := false
+	kept := bundle.ManagedSessions[:0]
+	for _, item := range bundle.ManagedSessions {
+		if item.RemoteID == strings.TrimSpace(sid) {
+			removed = true
+			continue
+		}
+		kept = append(kept, item)
+	}
+	bundle.ManagedSessions = kept
+	if removed {
+		if err := m.vault.Save(ctx, accountID, bundle); err != nil {
+			return outcome, err
+		}
+		outcome.LedgerUpdated = true
+	}
+	return outcome, nil
+}
+
+// RevokeAllOthers revokes every session except the current one and prunes the
+// ledger of sessions no longer live.
+func (m *PlatformSessionManager) RevokeAllOthers(ctx context.Context, accountID string) (CleanupResult, error) {
+	result := CleanupResult{Revoked: []string{}, Failed: []FailedRevocation{}}
+	bundle, err := m.vault.Load(ctx, accountID)
+	if err != nil {
+		return result, err
+	}
+	client, err := m.newClient(cookiesToState(bundle.Cookies))
+	if err != nil {
+		return result, err
+	}
+	count, err := client.RevokeOtherSessions(ctx, bundle.ParentAccessToken)
+	if err != nil {
+		return result, err
+	}
+	// Refresh the live list and drop revoked entries from the ledger.
+	live := map[string]bool{}
+	if sessions, err := client.Sessions(ctx, bundle.ParentAccessToken); err == nil {
+		for _, session := range sessions {
+			live[session.SID] = true
+		}
+	}
+	kept := bundle.ManagedSessions[:0]
+	for _, item := range bundle.ManagedSessions {
+		if live[item.RemoteID] {
+			kept = append(kept, item)
+		} else {
+			result.Revoked = append(result.Revoked, item.RemoteID)
+		}
+	}
+	bundle.ManagedSessions = kept
+	if err := m.vault.Save(ctx, accountID, bundle); err != nil {
+		return result, err
+	}
+	_ = count
+	return result, nil
 }
