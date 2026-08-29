@@ -194,9 +194,10 @@ func TestPlatformSessionManagerPreviewClassifiesSessions(t *testing.T) {
 		{SID: "sid-user-phone", LastActive: brokerTestNow.Add(-30 * time.Minute)},
 	}
 
+	harness.platform.sessionsResult[0].UserAgent = "SkyeLotteryBot/1.0"
 	manager := NewPlatformSessionManager(harness.vault, func([]state.Cookie) (PlatformClient, error) {
 		return harness.platform, nil
-	}, 1)
+	}, 1, "SkyeLotteryBot/1.0")
 	preview, err := manager.Preview(context.Background(), "account-a")
 	if err != nil {
 		t.Fatalf("Preview() error = %v", err)
@@ -220,6 +221,9 @@ func TestPlatformSessionManagerPreviewClassifiesSessions(t *testing.T) {
 		if item.SID == "sid-pinned" && item.Verdict == "candidate" {
 			t.Fatalf("pinned session became a candidate: %#v", item)
 		}
+		if item.SID == "sid-current" && item.Device != "工作台" {
+			t.Fatalf("workbench session device = %q, want 工作台", item.Device)
+		}
 	}
 }
 
@@ -242,7 +246,7 @@ func TestPlatformSessionManagerCleanupRevokesOnlyOwned(t *testing.T) {
 	}
 	manager := NewPlatformSessionManager(harness.vault, func([]state.Cookie) (PlatformClient, error) {
 		return harness.platform, nil
-	}, 1)
+	}, 1, "SkyeLotteryBot/1.0")
 
 	result, err := manager.Cleanup(context.Background(), "account-a")
 	if err != nil {
