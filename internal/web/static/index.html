@@ -645,7 +645,7 @@
       state.autoDrawLoading = true;
       try {
         const payload = await request('/api/auto-draw-status');
-        const reports = new Map((Array.isArray(payload.accounts) ? payload.accounts : []).map((item) => [item.account_id, item]));
+        const reports = new Map((Array.isArray(payload?.accounts) ? payload.accounts : []).map((item) => [item.account_id, item]));
         state.accounts.forEach((account) => {
           const report = reports.get(account.id);
           if (report) {
@@ -1133,22 +1133,15 @@
     async function loadAccounts() {
       const payload = await request('/api/accounts');
       const previous = state.activeAccountId;
-      state.accounts = Array.isArray(payload.accounts) ? payload.accounts.map(hydrateAccount) : [];
+      state.accounts = Array.isArray(payload?.accounts) ? payload.accounts.map(hydrateAccount) : [];
       state.activeAccountId = state.accounts.some((item) => item.id === previous) ? previous : (state.accounts[0]?.id || null);
       render();
       return refreshAutoDrawStatus();
     }
     renderRuntimeLogs();
-    loadAccounts()
-      .then((payload) => {
-        state.accounts = Array.isArray(payload.accounts) ? payload.accounts.map(hydrateAccount) : [];
-        state.activeAccountId = state.accounts[0]?.id || null;
-        render();
-		return refreshAutoDrawStatus();
-      })
-      .catch((error) => {
-        root.innerHTML = `<p class="page-message">${escapeHTML(error.message)}</p>`;
-      });
+    loadAccounts().catch((error) => {
+      root.innerHTML = `<p class="page-message">${escapeHTML(error.message)}</p>`;
+    });
     loadRuntimeLogs();
     window.setInterval(() => {
       if (document.visibilityState === 'hidden') return;

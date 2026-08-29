@@ -1342,6 +1342,14 @@ func TestIndexExposesAccountManagementControls(t *testing.T) {
 			t.Fatalf("index missing feature marker %s", feature)
 		}
 	}
+	// The initial load must not re-consume its own resolved value through a
+	// stale .then (it rendered once already and the value is undefined).
+	if bytes.Contains(indexHTML, []byte("loadAccounts()\n      .then(")) {
+		t.Fatal("stale .then after loadAccounts() wipes the rendered account card")
+	}
+	if !bytes.Contains(indexHTML, []byte("loadAccounts().catch(")) {
+		t.Fatal("initial account load must keep its error handler")
+	}
 	if bytes.Contains(indexHTML, []byte("account.username")) {
 		t.Fatal("index must not render raw usernames")
 	}
