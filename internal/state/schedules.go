@@ -21,8 +21,9 @@ const (
 // Empty values are normalized to draw for compatibility with the original
 // auto-draw schedule format.
 const (
-	AutoTaskDraw  = "draw"
-	AutoTaskClaim = "claim"
+	AutoTaskDraw    = "draw"
+	AutoTaskClaim   = "claim"
+	AutoTaskCheckin = "checkin"
 )
 
 const (
@@ -122,8 +123,8 @@ func normalizeDrawSchedule(entry AutoDrawSchedule, usedIDs map[string]bool) (Aut
 	if taskType == "" {
 		taskType = AutoTaskDraw
 	}
-	if taskType != AutoTaskDraw && taskType != AutoTaskClaim {
-		return AutoDrawSchedule{}, fmt.Errorf("自动任务类型仅支持 draw 或 claim")
+	if taskType != AutoTaskDraw && taskType != AutoTaskClaim && taskType != AutoTaskCheckin {
+		return AutoDrawSchedule{}, fmt.Errorf("任务类型仅支持 draw、claim 或 checkin")
 	}
 	kind := strings.ToLower(strings.TrimSpace(entry.Kind))
 	if kind != AutoDrawScheduleFixed && kind != AutoDrawScheduleRandom {
@@ -171,7 +172,7 @@ func normalizeDrawSchedule(entry AutoDrawSchedule, usedIDs map[string]bool) (Aut
 // to draw.
 func NormalizeTaskType(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
-	if value == AutoTaskClaim {
+	if value == AutoTaskClaim || value == AutoTaskCheckin {
 		return value
 	}
 	return AutoTaskDraw

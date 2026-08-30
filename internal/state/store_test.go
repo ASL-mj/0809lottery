@@ -3,6 +3,7 @@ package state
 import (
 	"encoding/json"
 	"os"
+	"strings"
 	"path/filepath"
 	"testing"
 	"time"
@@ -714,4 +715,74 @@ func testMoneyPtr(raw string) *quota.Money {
 	}
 	money := quota.NewAlreadyUSDPolicy().Convert(amount, quota.Provenance{Source: "test"})
 	return &money
+}
+
+func TestPostponeAutoDrawPlanShiftsPendingPlan(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "state.json"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+	plans, err := store.EnsureAutoDrawPlans([]AutoDrawPlan{{
+		Date: "2026-08-30", AccountID: "account-a", WindowID: "checkin", TaskType: AutoTaskCheckin,
+		PlannedAt: time.Date(2026, 8, 30, 10, 0, 0, 0, time.UTC),
+	}})
+	if err != nil || len(plans) != 1 {
+		t.Fatalf("EnsureAutoDrawPlans() = %#v, %v", plans, err)
+	}
+
+	next := time.Date(2026, 8, 30, 11, 0, 0, 0, time.UTC)
+	postponed, err := store.PostponeAutoDrawPlan(plans[0].Key, next, "活跃度不足（延后至 19:00 重试）")
+	if err != nil {
+		t.Fatalf("PostponeAutoDrawPlan() error = %v", err)
+	}
+	if postponed.Status != AutoDrawPlanPending || !postponed.PlannedAt.Equal(next) || !strings.Contains(postponed.Note, "活跃度不足") {
+		t.Fatalf("postponed plan = %#v", postponed)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	reopened, err := Open(store.path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopened.Close()
+	saved, _ := reopened.AutoDrawPlan(plans[0].Key)
+	if saved.Note == "" || saved.PlannedAt != next {
+		t.Fatalf("postponed plan did not persist: %#v", saved)
+	}
+
+	if _, err := store.FinishAutoDrawPlan(plans[0].Key, AutoDrawPlanSkipped, "done", "", nil, time.Now().UTC()); err != nil {
+		t.Fatalf("finish: %v", err)
+	}
+	if _, err := store.PostponeAutoDrawPlan(plans[0].Key, next, "again"); err == nil {
+		t.Fatal("postpone accepted a terminal plan")
+	}
+}
+
+// TaskType must survive normalization: claim and checkin plans must never be
+// re-tagged as draw plans, or the scheduler would execute the wrong task.
+func TestEnsureAutoDrawPlansPreservesTaskType(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "state.json"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+	plans, err := store.EnsureAutoDrawPlans([]AutoDrawPlan{
+		{Date: "2026-08-30", AccountID: "account-a", WindowID: "claim", TaskType: AutoTaskClaim,
+			PlannedAt: time.Date(2026, 8, 30, 8, 0, 0, 0, time.UTC)},
+		{Date: "2026-08-30", AccountID: "account-a", WindowID: "checkin", TaskType: AutoTaskCheckin,
+			PlannedAt: time.Date(2026, 8, 30, 9, 0, 0, 0, time.UTC)},
+		{Date: "2026-08-30", AccountID: "account-a", WindowID: "draw",
+			PlannedAt: time.Date(2026, 8, 30, 10, 0, 0, 0, time.UTC)},
+	})
+	if err != nil || len(plans) != 3 {
+		t.Fatalf("EnsureAutoDrawPlans() = %#v, %v", plans, err)
+	}
+	want := map[string]string{"claim": AutoTaskClaim, "checkin": AutoTaskCheckin, "draw": AutoTaskDraw}
+	for _, plan := range plans {
+		if plan.TaskType != want[plan.WindowID] {
+			t.Fatalf("plan %s task type = %q, want %q", plan.WindowID, plan.TaskType, want[plan.WindowID])
+		}
+	}
 }

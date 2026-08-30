@@ -37,6 +37,9 @@ func ScheduleLabel(entry state.AutoDrawSchedule) string {
 type AutoDrawExecutor func(context.Context, string, string) (DrawAvailableOutcome, error)
 type AutoClaimExecutor func(context.Context, string) (DailyClaimOutcome, error)
 
+// AutoCheckinExecutor runs one scheduled check-in attempt for an account.
+type AutoCheckinExecutor func(context.Context, string) (ActionOutcome, error)
+
 // AutoDrawScheduler persists one randomly scheduled draw for each configured
 // account/window. A persisted idempotency key lets a plan safely resume after a
 // process restart without creating a second draw request.
@@ -47,6 +50,7 @@ type AutoDrawScheduler struct {
 	randomOffset     func(int) (int, error)
 	draw             AutoDrawExecutor
 	claim            AutoClaimExecutor
+	checkin          AutoCheckinExecutor
 	tickInterval     time.Duration
 	operationTimeout time.Duration
 }
@@ -59,6 +63,7 @@ func NewAutoDrawScheduler(cfg config.Config, store *state.Store, broker *auth.Br
 		now:              time.Now,
 		randomOffset:     randomSecondOffset,
 		draw:             runner.DrawAvailableScheduled,
+		checkin:          runner.CheckinScheduled,
 		claim:            runner.ClaimDaily,
 		tickInterval:     autoDrawTickInterval,
 		operationTimeout: autoDrawOperationWindow,
@@ -293,6 +298,11 @@ func (s *AutoDrawScheduler) executePlan(parent context.Context, key string) erro
 		return nil
 	}
 
+	if state.NormalizeTaskType(plan.TaskType) == state.AutoTaskCheckin {
+		s.executeCheckinPlan(parent, key, plan)
+		return nil
+	}
+
 	operationTimeout := s.operationTimeout
 	if operationTimeout <= 0 {
 		operationTimeout = autoDrawOperationWindow
@@ -434,4 +444,123 @@ func randomSecondOffset(limit int) (int, error) {
 		return 0, err
 	}
 	return int(value.Int64()), nil
+}
+
+
+// autoCheckinPostponeWindow is how long a check-in task waits when the
+// platform's daily activity threshold is not met yet.
+const autoCheckinPostponeWindow = time.Hour
+
+// executeCheckinPlan runs one scheduled check-in attempt. When the account's
+// daily activity has not reached the platform threshold the plan is postponed
+// by one hour until the Beijing-time end of day; crossing midnight gives up
+// for the day and the next day's plan starts at the configured time again.
+func (s *AutoDrawScheduler) executeCheckinPlan(parent context.Context, key string, plan state.AutoDrawPlan) {
+	operationTimeout := s.operationTimeout
+	if operationTimeout <= 0 {
+		operationTimeout = autoDrawOperationWindow
+	}
+	if s.checkin == nil {
+		finished, err := s.store.FinishAutoDrawPlan(key, state.AutoDrawPlanFailed, "自动签到执行器不可用", "", nil, s.currentTime().UTC())
+		s.recordCheckinAttempt(finished, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(parent, operationTimeout)
+	outcome, checkinErr := s.checkin(ctx, plan.AccountID)
+	cancel()
+	if errors.Is(checkinErr, context.Canceled) && parent.Err() != nil {
+		return
+	}
+
+	executedAt := s.currentTime().UTC()
+	if checkinErr != nil {
+		if errors.Is(checkinErr, auth.ErrReauthRequired) {
+			finished, err := s.store.FinishAutoDrawPlan(key, state.AutoDrawPlanSkipped, "登录状态失效，需要重新认证，已跳过本次自动签到", "", nil, executedAt)
+			s.recordCheckinAttempt(finished, err)
+			return
+		}
+		finished, err := s.store.FinishAutoDrawPlan(key, state.AutoDrawPlanFailed, autoDrawFailureMessage(checkinErr), "", nil, executedAt)
+		s.recordCheckinAttempt(finished, err)
+		return
+	}
+	message := strings.TrimSpace(outcome.Action.Message)
+	if outcome.Action.Status == state.ActionFailed && strings.Contains(message, "活跃度不足") {
+		s.postponeCheckinPlan(key, message)
+		return
+	}
+	switch outcome.Action.Status {
+	case state.ActionCompleted:
+		finished, err := s.store.FinishAutoDrawPlan(key, state.AutoDrawPlanCompleted, "自动签到成功", "签到奖励", outcome.Action.CheckinQuotaAwardedUSD, executedAt)
+		s.recordCheckinAttempt(finished, err)
+	case state.ActionUnknown:
+		finished, err := s.store.FinishAutoDrawPlan(key, state.AutoDrawPlanFailed, firstNonEmpty(message, "签到结果待确认"), "", nil, executedAt)
+		s.recordCheckinAttempt(finished, err)
+	default:
+		finished, err := s.store.FinishAutoDrawPlan(key, state.AutoDrawPlanFailed, firstNonEmpty(message, "自动签到未成功"), "", nil, executedAt)
+		s.recordCheckinAttempt(finished, err)
+	}
+}
+
+// postponeCheckinPlan delays the plan by one hour, or skips it for the day
+// when the retry would cross Beijing midnight.
+func (s *AutoDrawScheduler) postponeCheckinPlan(key, reason string) {
+	now := s.currentTime()
+	next := now.Add(autoCheckinPostponeWindow)
+	if next.Day() != now.Day() || next.Sub(now.AddDate(0, 0, 1).Truncate(24*time.Hour)) >= 0 {
+		message := fmt.Sprintf("%s，已过当日 0 点，自动签到跳过", firstNonEmpty(reason, "活跃度不足"))
+		finished, err := s.store.FinishAutoDrawPlan(key, state.AutoDrawPlanSkipped, message, "", nil, now.UTC())
+		s.recordCheckinAttempt(finished, err)
+		return
+	}
+	note := fmt.Sprintf("%s（延后至 %02d:%02d 重试）", firstNonEmpty(reason, "活跃度不足"), next.Hour(), next.Minute())
+	if _, err := s.store.PostponeAutoDrawPlan(key, next, note); err != nil {
+		return
+	}
+	if _, err := s.store.AppendRuntimeLog(state.RuntimeLog{
+		OccurredAt: now.UTC(),
+		AccountID:  s.planAccountID(key),
+		WindowID:   s.planWindowID(key),
+		TaskType:   state.AutoTaskCheckin,
+		Status:     state.AutoDrawPlanSkipped,
+		Message:    note,
+	}); err != nil {
+		return
+	}
+}
+
+// recordCheckinAttempt persists the terminal state and its runtime log.
+func (s *AutoDrawScheduler) recordCheckinAttempt(finished state.AutoDrawPlan, err error) {
+	if err != nil {
+		return
+	}
+	if _, err := s.store.AppendRuntimeLog(state.RuntimeLog{
+		OccurredAt:    finished.ExecutedAt,
+		AccountID:     finished.AccountID,
+		WindowID:      finished.WindowID,
+		TaskType:      state.NormalizeTaskType(finished.TaskType),
+		Status:        finished.Status,
+		Message:       finished.Message,
+		PrizeLabel:    finished.PrizeLabel,
+		QuotaDeltaUSD: finished.QuotaDeltaUSD,
+	}); err != nil {
+		return
+	}
+}
+
+// planAccountID and planWindowID recover the plan coordinates from its key
+// (date:window:account) for runtime logs of actions that were postponed.
+func (s *AutoDrawScheduler) planAccountID(key string) string {
+	parts := strings.Split(key, ":")
+	if len(parts) == 3 {
+		return parts[2]
+	}
+	return ""
+}
+
+func (s *AutoDrawScheduler) planWindowID(key string) string {
+	parts := strings.Split(key, ":")
+	if len(parts) == 3 {
+		return parts[1]
+	}
+	return ""
 }

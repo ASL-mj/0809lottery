@@ -209,6 +209,7 @@
     .plan-settings:hover:not(:disabled) { background:#303030; color:var(--paper); }
     .plan-settings svg, .subscription-refresh svg { width:12px; height:12px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
     .plan-list, .subscription-list { display:grid; gap:6px; }
+    .plan-row__note { display:block; margin-top:2px; color:var(--muted); font-size:10px; line-height:1.4; overflow-wrap:anywhere; }
     .plan-list { margin:0; padding:0; list-style:none; }
     .plan-row, .subscription-item { min-width:0; display:grid; grid-template-columns:minmax(0,1fr) auto auto auto; gap:8px; align-items:center; padding:8px 9px; border:1px solid var(--line); border-radius:5px; background:var(--paper); }
     .plan-row__main { min-width:0; }
@@ -313,7 +314,7 @@
       <h3>设置自动任务</h3>
       <p class="schedule-dialog__hint">账号：<strong id="schedule-dialog-account"></strong></p>
       <div class="schedule-dialog__fields">
-        <label>任务类型<select id="schedule-dialog-task"><option value="draw">自动抽奖</option><option value="claim">领取每日抽奖次数</option></select></label>
+        <label>任务类型<select id="schedule-dialog-task"><option value="draw">自动抽奖</option><option value="claim">领取每日抽奖次数</option><option value="checkin">自动签到（活跃度达标后执行）</option></select></label>
         <label>执行方式<select id="schedule-dialog-kind"><option value="fixed">固定时间</option><option value="random">时段随机</option></select></label>
         <label>开始时间<input id="schedule-dialog-start" type="time" required></label>
         <label id="schedule-dialog-end-label">结束时间<input id="schedule-dialog-end" type="time"></label>
@@ -629,10 +630,11 @@
         const plan = plansBySchedule.get(entry.id);
         const display = plan ? autoDrawPlanDisplay(plan) : { tone: 'pending', label: '计划待生成' };
         const mode = entry.kind === 'random' ? '时段随机' : '固定时间';
-        const cadence = entry.task_type === 'claim' ? '领取次数' : '自动抽奖';
+        const cadence = entry.task_type === 'claim' ? '领取次数' : entry.task_type === 'checkin' ? '自动签到' : '自动抽奖';
         const statusClass = display.tone === 'pending' ? ' plan-row__status--pending' : '';
         const enabled = entry.enabled !== false;
-        return `<li class="plan-row"><div class="plan-row__main"><strong class="plan-row__time">${escapeHTML(entry.label || formatScheduleLabel(entry))}</strong><span class="plan-row__mode">${mode} · ${cadence}</span></div><span class="plan-row__status${statusClass}">${escapeHTML(display.label)}</span><button class="task-switch" role="switch" aria-checked="${enabled ? 'true' : 'false'}" aria-label="${enabled ? '停用' : '启用'}自动任务" data-task-toggle="${escapeHTML(account.id)}" data-task-id="${escapeHTML(entry.id)}" data-enabled="${enabled ? 'false' : 'true'}"></button><button class="action action--compact" type="button" data-schedule-remove="${escapeHTML(account.id)}" data-schedule-id="${escapeHTML(entry.id)}">移除</button></li>`;
+        const note = plan && plan.note ? `<span class="plan-row__note">${escapeHTML(plan.note)}</span>` : '';
+        return `<li class="plan-row"><div class="plan-row__main"><strong class="plan-row__time">${escapeHTML(entry.label || formatScheduleLabel(entry))}</strong><span class="plan-row__mode">${mode} · ${cadence}</span>${note}</div><span class="plan-row__status${statusClass}">${escapeHTML(display.label)}</span><button class="task-switch" role="switch" aria-checked="${enabled ? 'true' : 'false'}" aria-label="${enabled ? '停用' : '启用'}自动任务" data-task-toggle="${escapeHTML(account.id)}" data-task-id="${escapeHTML(entry.id)}" data-enabled="${enabled ? 'false' : 'true'}"></button><button class="action action--compact" type="button" data-schedule-remove="${escapeHTML(account.id)}" data-schedule-id="${escapeHTML(entry.id)}">移除</button></li>`;
       }).join('');
       const list = entries.length ? `<ul class="plan-list">${items}</ul>` : '<p class="auto-draw__empty">暂无自动任务，请点击右上角设置。</p>';
       const error = account.auto_draw_error ? `<div class="auto-draw__error">计划更新失败：${escapeHTML(account.auto_draw_error)}</div>` : '';

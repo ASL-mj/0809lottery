@@ -128,6 +128,10 @@ type AutoDrawPlan struct {
 	Message        string             `json:"message,omitempty"`
 	PrizeLabel     string             `json:"prize_label,omitempty"`
 	QuotaDeltaUSD  *quota.Money       `json:"quota_delta_usd,omitempty"`
+	// Note carries a human-readable status for pending plans, e.g. the reason
+	// and new deadline of a postponed auto check-in. Cleared when execution
+	// starts and on finish.
+	Note           string             `json:"note,omitempty"`
 	CreatedAt      time.Time          `json:"created_at"`
 	UpdatedAt      time.Time          `json:"updated_at"`
 }
@@ -605,6 +609,7 @@ func (s *Store) BeginAutoDrawPlan(key string) (AutoDrawPlan, bool, error) {
 	previous := copyAutoDrawPlan(plan)
 	plan.Status = AutoDrawPlanRunning
 	plan.ExecutedAt = time.Time{}
+	plan.Note = ""
 	plan.Message = ""
 	plan.PrizeLabel = ""
 	plan.QuotaDeltaUSD = nil
@@ -988,6 +993,7 @@ func normalizeAutoDrawPlan(plan AutoDrawPlan, preserveTimestamps bool) (AutoDraw
 		Date:           date,
 		AccountID:      accountID,
 		WindowID:       windowID,
+		TaskType:       NormalizeTaskType(plan.TaskType),
 		PlannedAt:      plan.PlannedAt.UTC(),
 		IdempotencyKey: idempotencyKey,
 		Status:         status,
@@ -1063,7 +1069,7 @@ func normalizeRuntimeLog(log RuntimeLog) (RuntimeLog, error) {
 
 func normalizeAutoTaskType(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
-	if value != AutoTaskClaim {
+	if value != AutoTaskClaim && value != AutoTaskCheckin {
 		return AutoTaskDraw
 	}
 	return value
@@ -1148,4 +1154,42 @@ func (s *Store) lockByKey(key string) func() {
 			s.actionLocksMu.Unlock()
 		})
 	}
+}
+
+// PostponeAutoDrawPlan shifts a pending plan's execution time and records why.
+// It is used by the auto check-in task when the platform's daily activity
+// threshold is not met yet: the plan stays pending and retries later. Terminal
+// plans and missing plans are rejected.
+func (s *Store) PostponeAutoDrawPlan(key string, nextAt time.Time, note string) (AutoDrawPlan, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	key = strings.TrimSpace(key)
+	plan, ok := s.data.Plans[key]
+	if !ok {
+		return AutoDrawPlan{}, fmt.Errorf("auto draw plan %q not found", key)
+	}
+	if isTerminalAutoDrawStatus(plan.Status) {
+		return AutoDrawPlan{}, fmt.Errorf("auto draw plan %q already finished", key)
+	}
+	if nextAt.IsZero() {
+		return AutoDrawPlan{}, fmt.Errorf("postpone time is required")
+	}
+	note, err := normalizeDisplayText("note", note, 512)
+	if err != nil {
+		return AutoDrawPlan{}, err
+	}
+
+	previous := copyAutoDrawPlan(plan)
+	plan.Status = AutoDrawPlanPending
+	plan.PlannedAt = nextAt.UTC()
+	plan.ExecutedAt = time.Time{}
+	plan.Note = note
+	plan.UpdatedAt = time.Now().UTC()
+	s.data.Plans[key] = copyAutoDrawPlan(plan)
+	if err := s.persistLocked(); err != nil {
+		s.data.Plans[key] = previous
+		return AutoDrawPlan{}, err
+	}
+	return copyAutoDrawPlan(plan), nil
 }

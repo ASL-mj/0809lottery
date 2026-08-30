@@ -492,3 +492,153 @@ func TestAutoDrawSchedulerSkipsOrphanedPlans(t *testing.T) {
 		}
 	}
 }
+
+func newCheckinTestScheduler(t *testing.T, store *state.Store, now *time.Time, execute AutoCheckinExecutor) *AutoDrawScheduler {
+	t.Helper()
+	scheduler := newAutoDrawTestScheduler(store, []string{"account-a"}, now, nil, func(context.Context, string, string) (DrawAvailableOutcome, error) {
+		t.Fatal("checkin task must not run the draw executor")
+		return DrawAvailableOutcome{}, nil
+	})
+	if _, err := store.SetDrawSchedules("account-a", []state.AutoDrawSchedule{
+		{ID: "checkin", Kind: state.AutoDrawScheduleFixed, Start: "10:00", TaskType: state.AutoTaskCheckin, Enabled: true},
+	}); err != nil {
+		t.Fatalf("seed checkin schedule: %v", err)
+	}
+	scheduler.checkin = execute
+	return scheduler
+}
+
+// When the platform's daily activity threshold is not met the plan is
+// postponed by one hour with a visible note, not failed.
+func TestSchedulerPostponesCheckinWhenActivityUnmet(t *testing.T) {
+	store := openAutoDrawTestStore(t)
+	now := autoDrawTime(2026, time.August, 30, 10, 0, 1)
+	attempts := 0
+	scheduler := newCheckinTestScheduler(t, store, &now, func(ctx context.Context, accountID string) (ActionOutcome, error) {
+		attempts++
+		return ActionOutcome{Action: state.Action{
+			Status:  state.ActionFailed,
+			Message: "今日活跃度不足，距离签到还需消耗 $2.00",
+		}}, nil
+	})
+
+	// Tick before the configured time so today's plan is created, then let it
+	// come due.
+	now = autoDrawTime(2026, time.August, 30, 9, 59, 50)
+	if err := scheduler.Tick(context.Background()); err != nil {
+		t.Fatalf("planning Tick() error = %v", err)
+	}
+	now = autoDrawTime(2026, time.August, 30, 10, 0, 1)
+	if err := scheduler.Tick(context.Background()); err != nil {
+		t.Fatalf("first Tick() error = %v", err)
+	}
+	plan := findAutoDrawPlan(t, store, now.Format("2006-01-02"), "account-a", "checkin")
+	if plan.Status != state.AutoDrawPlanPending {
+		t.Fatalf("plan status = %s, want pending after postpone", plan.Status)
+	}
+	if want := autoDrawTime(2026, time.August, 30, 11, 0, 1).UTC(); !plan.PlannedAt.Equal(want) {
+		t.Fatalf("postponed time = %s, want %s", plan.PlannedAt, want)
+	}
+	if !strings.Contains(plan.Note, "活跃度不足") || !strings.Contains(plan.Note, "11:00") {
+		t.Fatalf("plan note = %q", plan.Note)
+	}
+	logs := store.RuntimeLogs(10)
+	if len(logs) != 1 || logs[0].Status != state.AutoDrawPlanSkipped || !strings.Contains(logs[0].Message, "活跃度不足") {
+		t.Fatalf("postpone logs = %#v", logs)
+	}
+
+	// Threshold met on the postponed attempt: the plan completes.
+	now = autoDrawTime(2026, time.August, 30, 11, 0, 1)
+	scheduler.checkin = func(context.Context, string) (ActionOutcome, error) {
+		attempts++
+		return ActionOutcome{Action: state.Action{
+			Status:                state.ActionCompleted,
+			Message:               "签到成功",
+			CheckinQuotaAwardedUSD: moneyPtr("2.40"),
+		}}, nil
+	}
+	if err := scheduler.Tick(context.Background()); err != nil {
+		t.Fatalf("postponed Tick() error = %v", err)
+	}
+	plan = findAutoDrawPlan(t, store, now.Format("2006-01-02"), "account-a", "checkin")
+	if plan.Status != state.AutoDrawPlanCompleted || plan.Note != "" {
+		t.Fatalf("completed plan = %#v", plan)
+	}
+	if plan.QuotaDeltaUSD == nil || plan.QuotaDeltaUSD.Value != "2.4" {
+		t.Fatalf("checkin reward missing: %#v", plan.QuotaDeltaUSD)
+	}
+	if attempts != 2 {
+		t.Fatalf("checkin attempts = %d, want 2", attempts)
+	}
+}
+
+// A retry that would cross Beijing midnight gives up for the day; the next
+// day's plan is generated again at the configured time.
+func TestSchedulerSkipsCheckinAtMidnight(t *testing.T) {
+	store := openAutoDrawTestStore(t)
+	now := autoDrawTime(2026, time.August, 30, 23, 30, 0)
+	scheduler := newCheckinTestScheduler(t, store, &now, func(context.Context, string) (ActionOutcome, error) {
+		return ActionOutcome{Action: state.Action{
+			Status:  state.ActionFailed,
+			Message: "今日活跃度不足，暂时无法换算签到所需额度",
+		}}, nil
+	})
+	if _, err := store.SetDrawSchedules("account-a", []state.AutoDrawSchedule{
+		{ID: "checkin", Kind: state.AutoDrawScheduleFixed, Start: "23:30", TaskType: state.AutoTaskCheckin, Enabled: true},
+	}); err != nil {
+		t.Fatalf("seed midnight schedule: %v", err)
+	}
+	now = autoDrawTime(2026, time.August, 30, 23, 29, 0)
+	if err := scheduler.Tick(context.Background()); err != nil {
+		t.Fatalf("planning Tick() error = %v", err)
+	}
+	now = autoDrawTime(2026, time.August, 30, 23, 30, 1)
+	if err := scheduler.Tick(context.Background()); err != nil {
+		t.Fatalf("midnight Tick() error = %v", err)
+	}
+	now = autoDrawTime(2026, time.August, 31, 0, 29, 0)
+	if err := scheduler.Tick(context.Background()); err != nil {
+		t.Fatalf("midnight Tick() error = %v", err)
+	}
+	plan := findAutoDrawPlan(t, store, "2026-08-30", "account-a", "checkin")
+	if plan.Status != state.AutoDrawPlanSkipped || !strings.Contains(plan.Message, "已过当日") {
+		t.Fatalf("midnight plan = %#v", plan)
+	}
+	// The next day starts fresh with a new plan at the configured 10:00.
+	tomorrow := findAutoDrawPlan(t, store, "2026-08-31", "account-a", "checkin")
+	if tomorrow.Status != state.AutoDrawPlanPending {
+		t.Fatalf("next-day plan = %#v", tomorrow)
+	}
+	if local := tomorrow.PlannedAt.In(shanghaiLocation); local.Hour() != 23 || local.Minute() != 30 {
+		t.Fatalf("next-day planned time = %s, want 23:30", local)
+	}
+}
+
+// A check-in task that completes records the reward on the plan and log.
+func TestSchedulerRunsCheckinTaskToCompletion(t *testing.T) {
+	store := openAutoDrawTestStore(t)
+	now := autoDrawTime(2026, time.August, 30, 9, 59, 50)
+	scheduler := newCheckinTestScheduler(t, store, &now, func(context.Context, string) (ActionOutcome, error) {
+		return ActionOutcome{Action: state.Action{
+			Status:                 state.ActionCompleted,
+			Message:                "签到成功",
+			CheckinQuotaAwardedUSD: moneyPtr("2.40"),
+		}}, nil
+	})
+
+	if err := scheduler.Tick(context.Background()); err != nil {
+		t.Fatalf("Tick() error = %v", err)
+	}
+	now = autoDrawTime(2026, time.August, 30, 10, 0, 1)
+	if err := scheduler.Tick(context.Background()); err != nil {
+		t.Fatalf("due Tick() error = %v", err)
+	}
+	plan := findAutoDrawPlan(t, store, now.Format("2006-01-02"), "account-a", "checkin")
+	if plan.Status != state.AutoDrawPlanCompleted || plan.Message != "自动签到成功" || plan.QuotaDeltaUSD == nil || plan.QuotaDeltaUSD.Value != "2.4" {
+		t.Fatalf("completed checkin plan = %#v", plan)
+	}
+	logs := store.RuntimeLogs(10)
+	if len(logs) != 1 || logs[0].Status != state.AutoDrawPlanCompleted || logs[0].TaskType != state.AutoTaskCheckin {
+		t.Fatalf("checkin logs = %#v", logs)
+	}
+}

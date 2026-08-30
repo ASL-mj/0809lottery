@@ -148,7 +148,7 @@ func (r *Runner) Dashboard(ctx context.Context, accountID string) (lottery.Dashb
 	return dashboard, nil
 }
 
-func (r *Runner) Checkin(ctx context.Context, accountID string) (ActionOutcome, error) {
+func (r *Runner) Checkin(ctx context.Context, accountID string, intents ...auth.Intent) (ActionOutcome, error) {
 	account, err := r.account(accountID)
 	if err != nil {
 		return ActionOutcome{}, err
@@ -187,7 +187,7 @@ func (r *Runner) Checkin(ctx context.Context, accountID string) (ActionOutcome, 
 		}
 	}
 
-	sess, client, err := r.acquireParentForAction(ctx, account.ID)
+	sess, client, err := r.acquireParentForAction(ctx, account.ID, intents...)
 	if err != nil {
 		return r.recordActionError(action, err, false, authRetryable(err))
 	}
@@ -258,6 +258,12 @@ func (r *Runner) Checkin(ctx context.Context, accountID string) (ActionOutcome, 
 		return ActionOutcome{}, err
 	}
 	return ActionOutcome{Action: updated}, nil
+}
+
+// CheckinScheduled is the scheduler's entry point; it runs with the
+// ScheduledAutomation intent so it can never trigger a password login.
+func (r *Runner) CheckinScheduled(ctx context.Context, accountID string) (ActionOutcome, error) {
+	return r.Checkin(ctx, accountID, auth.ScheduledAutomation)
 }
 
 // reconcileFailedCheckin checks the upstream truth for a locally failed
@@ -450,8 +456,12 @@ func (r *Runner) recordActionError(action state.Action, cause error, unknown, re
 
 // acquireParentForAction obtains a parent session plus a matching client for
 // a side-effecting action.
-func (r *Runner) acquireParentForAction(ctx context.Context, accountID string) (session, WebsiteClient, error) {
-	sess, err := r.acquire(ctx, accountID, auth.SideEffect, auth.SessionParent)
+func (r *Runner) acquireParentForAction(ctx context.Context, accountID string, intents ...auth.Intent) (session, WebsiteClient, error) {
+	intent := auth.SideEffect
+	if len(intents) > 0 {
+		intent = intents[0]
+	}
+	sess, err := r.acquire(ctx, accountID, intent, auth.SessionParent)
 	if err != nil {
 		return session{}, nil, err
 	}

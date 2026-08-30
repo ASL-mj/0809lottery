@@ -327,6 +327,7 @@ func (s *Server) handleAutoDrawStatus(writer http.ResponseWriter, request *http.
 		Status        string       `json:"status"`
 		TaskType      string       `json:"task_type,omitempty"`
 		Message       string       `json:"message,omitempty"`
+		Note          string       `json:"note,omitempty"`
 		PrizeLabel    string       `json:"prize_label,omitempty"`
 		QuotaDeltaUSD *quota.Money `json:"quota_delta_usd,omitempty"`
 	}
@@ -373,11 +374,12 @@ func (s *Server) handleAutoDrawStatus(writer http.ResponseWriter, request *http.
 			plans = append(plans, planView{
 				ScheduleID:    plan.WindowID,
 				Label:         labels[plan.WindowID],
+				TaskType:      state.NormalizeTaskType(plan.TaskType),
 				PlannedAt:     timePointer(plan.PlannedAt),
 				ExecutedAt:    timePointer(plan.ExecutedAt),
 				Status:        string(plan.Status),
-				TaskType:      state.NormalizeTaskType(plan.TaskType),
 				Message:       publicRuntimeLogText(plan.Message),
+				Note:          publicRuntimeLogText(plan.Note),
 				PrizeLabel:    publicRuntimeLogText(plan.PrizeLabel),
 				QuotaDeltaUSD: plan.QuotaDeltaUSD,
 			})
