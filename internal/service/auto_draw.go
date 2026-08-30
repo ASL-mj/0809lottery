@@ -35,6 +35,7 @@ func ScheduleLabel(entry state.AutoDrawSchedule) string {
 }
 
 type AutoDrawExecutor func(context.Context, string, string) (DrawAvailableOutcome, error)
+type AutoClaimExecutor func(context.Context, string) (DailyClaimOutcome, error)
 
 // AutoDrawScheduler persists one randomly scheduled draw for each configured
 // account/window. A persisted idempotency key lets a plan safely resume after a
@@ -45,6 +46,7 @@ type AutoDrawScheduler struct {
 	now              func() time.Time
 	randomOffset     func(int) (int, error)
 	draw             AutoDrawExecutor
+	claim            AutoClaimExecutor
 	tickInterval     time.Duration
 	operationTimeout time.Duration
 }
@@ -57,6 +59,7 @@ func NewAutoDrawScheduler(cfg config.Config, store *state.Store, broker *auth.Br
 		now:              time.Now,
 		randomOffset:     randomSecondOffset,
 		draw:             runner.DrawAvailableScheduled,
+		claim:            runner.ClaimDaily,
 		tickInterval:     autoDrawTickInterval,
 		operationTimeout: autoDrawOperationWindow,
 	}
@@ -144,8 +147,12 @@ func (s *AutoDrawScheduler) ensurePlans(date string, now time.Time) ([]state.Aut
 	}
 	existing := s.store.AutoDrawPlans(date)
 	existingByAccountSchedule := make(map[string]state.AutoDrawPlan, len(existing))
+	claimScheduled := make(map[string]bool)
 	for _, plan := range existing {
 		existingByAccountSchedule[plan.AccountID+"\x00"+plan.WindowID] = plan
+		if state.NormalizeTaskType(plan.TaskType) == state.AutoTaskClaim {
+			claimScheduled[plan.AccountID] = true
+		}
 	}
 	missing := make([]state.AutoDrawPlan, 0)
 	for _, record := range enabled {
@@ -154,6 +161,12 @@ func (s *AutoDrawScheduler) ensurePlans(date string, now time.Time) ([]state.Aut
 			continue
 		}
 		for _, entry := range s.store.DrawSchedules(record.ID) {
+			if !entry.Enabled {
+				continue
+			}
+			if state.NormalizeTaskType(entry.TaskType) == state.AutoTaskClaim && claimScheduled[accountID] {
+				continue
+			}
 			if _, ok := existingByAccountSchedule[accountID+"\x00"+entry.ID]; ok {
 				continue
 			}
@@ -165,9 +178,13 @@ func (s *AutoDrawScheduler) ensurePlans(date string, now time.Time) ([]state.Aut
 				Date:      date,
 				AccountID: accountID,
 				WindowID:  entry.ID,
+				TaskType:  entry.TaskType,
 				PlannedAt: plannedAt.UTC(),
 				Status:    state.AutoDrawPlanPending,
 			})
+			if state.NormalizeTaskType(entry.TaskType) == state.AutoTaskClaim {
+				claimScheduled[accountID] = true
+			}
 		}
 	}
 	if len(missing) > 0 {
@@ -240,6 +257,7 @@ func (s *AutoDrawScheduler) executePlan(parent context.Context, key string) erro
 			OccurredAt: finished.ExecutedAt,
 			AccountID:  finished.AccountID,
 			WindowID:   finished.WindowID,
+			TaskType:   state.NormalizeTaskType(finished.TaskType),
 			Status:     finished.Status,
 			Message:    finished.Message,
 		}); err != nil {
@@ -248,15 +266,16 @@ func (s *AutoDrawScheduler) executePlan(parent context.Context, key string) erro
 		return nil
 	}
 
-	// Plans left over from a removed or replaced schedule must never fire.
-	hasSchedule := false
+	// Plans left over from a removed, disabled, or replaced schedule must never fire.
+	var schedule *state.AutoDrawSchedule
 	for _, entry := range s.store.DrawSchedules(plan.AccountID) {
-		if entry.ID == plan.WindowID {
-			hasSchedule = true
+		if entry.ID == plan.WindowID && entry.Enabled {
+			copyEntry := entry
+			schedule = &copyEntry
 			break
 		}
 	}
-	if !hasSchedule {
+	if schedule == nil {
 		finished, finishErr := s.store.FinishAutoDrawPlan(key, state.AutoDrawPlanSkipped, "定时抽奖计划已变更，跳过本次执行", "", nil, s.currentTime().UTC())
 		if finishErr != nil {
 			return fmt.Errorf("finish auto draw plan: %w", finishErr)
@@ -265,6 +284,7 @@ func (s *AutoDrawScheduler) executePlan(parent context.Context, key string) erro
 			OccurredAt: finished.ExecutedAt,
 			AccountID:  finished.AccountID,
 			WindowID:   finished.WindowID,
+			TaskType:   state.NormalizeTaskType(finished.TaskType),
 			Status:     finished.Status,
 			Message:    finished.Message,
 		}); err != nil {
@@ -278,7 +298,21 @@ func (s *AutoDrawScheduler) executePlan(parent context.Context, key string) erro
 		operationTimeout = autoDrawOperationWindow
 	}
 	ctx, cancel := context.WithTimeout(parent, operationTimeout)
-	outcome, drawErr := s.draw(ctx, plan.AccountID, plan.IdempotencyKey)
+	var outcome DrawAvailableOutcome
+	var drawErr error
+	if state.NormalizeTaskType(plan.TaskType) == state.AutoTaskClaim {
+		if s.claim == nil {
+			drawErr = errors.New("每日抽奖次数领取执行器不可用")
+		} else {
+			claimOutcome, claimErr := s.claim(ctx, plan.AccountID)
+			drawErr = claimErr
+			outcome = drawAvailableOutcomeFromClaim(claimOutcome)
+		}
+	} else if s.draw == nil {
+		drawErr = errors.New("自动抽奖执行器不可用")
+	} else {
+		outcome, drawErr = s.draw(ctx, plan.AccountID, plan.IdempotencyKey)
+	}
 	cancel()
 	if errors.Is(drawErr, context.Canceled) && parent.Err() != nil {
 		// The service is stopping, not a draw failure. Keep this plan in its
@@ -288,7 +322,7 @@ func (s *AutoDrawScheduler) executePlan(parent context.Context, key string) erro
 	}
 
 	executedAt := s.currentTime().UTC()
-	status, message, prizeLabel, quotaDeltaUSD := autoDrawExecutionResult(outcome, drawErr)
+	status, message, prizeLabel, quotaDeltaUSD := autoTaskExecutionResult(plan.TaskType, outcome, drawErr)
 	finished, err := s.store.FinishAutoDrawPlan(key, status, message, prizeLabel, quotaDeltaUSD, executedAt)
 	if err != nil {
 		return fmt.Errorf("finish auto draw plan: %w", err)
@@ -297,6 +331,7 @@ func (s *AutoDrawScheduler) executePlan(parent context.Context, key string) erro
 		OccurredAt:    executedAt,
 		AccountID:     finished.AccountID,
 		WindowID:      finished.WindowID,
+		TaskType:      state.NormalizeTaskType(finished.TaskType),
 		Status:        finished.Status,
 		Message:       finished.Message,
 		PrizeLabel:    finished.PrizeLabel,
@@ -305,6 +340,33 @@ func (s *AutoDrawScheduler) executePlan(parent context.Context, key string) erro
 		return fmt.Errorf("append auto draw runtime log: %w", err)
 	}
 	return nil
+}
+
+func drawAvailableOutcomeFromClaim(outcome DailyClaimOutcome) DrawAvailableOutcome {
+	return DrawAvailableOutcome{Skipped: outcome.Added == 0 && outcome.Action.Status != state.ActionCompleted}
+}
+
+func autoTaskExecutionResult(taskType string, outcome DrawAvailableOutcome, taskErr error) (state.AutoDrawPlanStatus, string, string, *quota.Money) {
+	if state.NormalizeTaskType(taskType) == state.AutoTaskClaim {
+		if taskErr != nil {
+			if errors.Is(taskErr, auth.ErrReauthRequired) {
+				return state.AutoDrawPlanSkipped, "登录状态失效，需要重新认证，已跳过每日领取", "", nil
+			}
+			return state.AutoDrawPlanFailed, autoClaimFailureMessage(taskErr), "", nil
+		}
+		return state.AutoDrawPlanCompleted, "每日抽奖次数领取完成", "", nil
+	}
+	return autoDrawExecutionResult(outcome, taskErr)
+}
+
+func autoClaimFailureMessage(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "每日领取请求超时"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "每日领取任务已取消"
+	}
+	return "每日领取服务请求失败"
 }
 
 func autoDrawExecutionResult(outcome DrawAvailableOutcome, drawErr error) (state.AutoDrawPlanStatus, string, string, *quota.Money) {

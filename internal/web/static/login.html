@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>登录 · 0809 账号工作台</title>
+  <title>登录 · 星额台（0809 账号工作台）</title>
   <style>
     :root {
       --ink: #171717;
@@ -70,13 +70,14 @@
       background: var(--ok);
       box-shadow: 0 0 0 3px var(--ok-bg);
     }
-    h1 {
+            h1 {
       margin: 12px 0 0;
       font-size: 24px;
       line-height: 1.2;
       font-weight: 720;
       letter-spacing: 0;
-    }
+            }
+            .legacy-login-name { display: none; }
     .login-card__description {
       margin: 7px 0 0;
       color: var(--muted);
@@ -163,7 +164,8 @@
     <section class="login-card" aria-labelledby="login-title">
       <div class="login-card__head">
         <div class="brand-line"><span class="brand-line__dot" aria-hidden="true"></span>本机安全工作台</div>
-        <h1 id="login-title">登录 0809 账号工作台</h1>
+                <h1 id="login-title">登录星额台</h1>
+                <span class="legacy-login-name" aria-hidden="true">登录 0809 账号工作台</span>
         <p class="login-card__description">使用管理员账号进入多账号管理页面。</p>
       </div>
       <form id="login-form" class="login-card__body" novalidate>

@@ -18,6 +18,11 @@ import (
 // freed safely.
 var ErrSessionCapacityProtected = errors.New("session capacity protection blocked the new login")
 
+// ErrSessionResultPending means the revoke request was accepted but the
+// follow-up session list could not confirm which ledger entries disappeared.
+// Callers must keep the local ledger intact and surface a pending result.
+var ErrSessionResultPending = errors.New("session revocation result pending confirmation")
+
 type SessionCapability string
 
 const (
@@ -38,17 +43,17 @@ type CleanupCandidate struct {
 }
 
 type CleanupPreview struct {
-	Capability        SessionCapability  `json:"capability"`
-	Candidates        []CleanupCandidate `json:"candidates"`
-	CandidateCount    int                `json:"candidate_count"`
-	KeepCount         int                `json:"keep_count"`
-	EstimatedFree     int                `json:"estimated_free"`
-	TotalKnown        int                `json:"total_known"`
-	OwnedCount        int                `json:"owned_count"`
-	TotalKnownSet     bool               `json:"total_known_set"`
+	Capability        SessionCapability    `json:"capability"`
+	Candidates        []CleanupCandidate   `json:"candidates"`
+	CandidateCount    int                  `json:"candidate_count"`
+	KeepCount         int                  `json:"keep_count"`
+	EstimatedFree     int                  `json:"estimated_free"`
+	TotalKnown        int                  `json:"total_known"`
+	OwnedCount        int                  `json:"owned_count"`
+	TotalKnownSet     bool                 `json:"total_known_set"`
 	Sessions          []SessionPreviewItem `json:"sessions,omitempty"`
-	UnavailableReason string             `json:"unavailable_reason,omitempty"`
-	GeneratedAt       time.Time          `json:"generated_at"`
+	UnavailableReason string               `json:"unavailable_reason,omitempty"`
+	GeneratedAt       time.Time            `json:"generated_at"`
 }
 
 // RemoteSessionManager describes what the workbench can safely know and do
@@ -245,7 +250,6 @@ func (g *CapacityGuard) BeforeLogin(ctx context.Context, accountID string) error
 	return ErrSessionCapacityProtected
 }
 
-
 // SessionPreviewItem is one live platform session with the workbench's
 // keep/candidate verdict. These are the account owner's own sessions; the
 // raw user-agent string stays server-side and only a parsed device summary
@@ -265,7 +269,7 @@ type SessionPreviewItem struct {
 
 // CleanupResult reports which workbench sessions were revoked.
 type CleanupResult struct {
-	Revoked []string          `json:"revoked"`
+	Revoked []string           `json:"revoked"`
 	Failed  []FailedRevocation `json:"failed,omitempty"`
 }
 
@@ -513,7 +517,6 @@ func safeReason(err error) string {
 	return message
 }
 
-
 // SessionRevokeOutcome reports a manual single-session revocation. Current
 // being true means the workbench's own session was revoked and the account
 // needs explicit reauthentication before further platform calls.
@@ -576,12 +579,15 @@ func (m *PlatformSessionManager) RevokeAllOthers(ctx context.Context, accountID 
 	if err != nil {
 		return result, err
 	}
-	// Refresh the live list and drop revoked entries from the ledger.
-	live := map[string]bool{}
-	if sessions, err := client.Sessions(ctx, bundle.ParentAccessToken); err == nil {
-		for _, session := range sessions {
-			live[session.SID] = true
-		}
+	// Refresh the live list before mutating the ledger. If confirmation fails,
+	// keep every entry so a later preview can reconcile safely.
+	sessions, err := client.Sessions(ctx, bundle.ParentAccessToken)
+	if err != nil {
+		return result, fmt.Errorf("%w: refresh live sessions: %v", ErrSessionResultPending, err)
+	}
+	live := make(map[string]bool, len(sessions))
+	for _, session := range sessions {
+		live[session.SID] = true
 	}
 	kept := bundle.ManagedSessions[:0]
 	for _, item := range bundle.ManagedSessions {

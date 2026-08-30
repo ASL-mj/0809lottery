@@ -120,6 +120,7 @@ type AutoDrawPlan struct {
 	Date           string             `json:"date"`
 	AccountID      string             `json:"account_id"`
 	WindowID       string             `json:"window_id"`
+	TaskType       string             `json:"task_type,omitempty"`
 	PlannedAt      time.Time          `json:"planned_at"`
 	IdempotencyKey string             `json:"idempotency_key,omitempty"`
 	Status         AutoDrawPlanStatus `json:"status"`
@@ -136,6 +137,7 @@ type RuntimeLog struct {
 	OccurredAt    time.Time          `json:"occurred_at"`
 	AccountID     string             `json:"account_id"`
 	WindowID      string             `json:"window_id"`
+	TaskType      string             `json:"task_type,omitempty"`
 	Status        AutoDrawPlanStatus `json:"status"`
 	Message       string             `json:"message,omitempty"`
 	PrizeLabel    string             `json:"prize_label,omitempty"`
@@ -143,19 +145,19 @@ type RuntimeLog struct {
 }
 
 type diskState struct {
-	Version   int                       `json:"version"`
-	Accounts  map[string]account.Record `json:"accounts,omitempty"`
+	Version    int                           `json:"version"`
+	Accounts   map[string]account.Record     `json:"accounts,omitempty"`
 	AuthHealth map[string]account.AuthHealth `json:"auth_health,omitempty"`
 	// LegacyAuth bridges version-3 authentication tokens for runners that have
 	// not moved to the secret vault yet. Migrated version-4 files never
 	// contain it.
-	LegacyAuth map[string]AuthState    `json:"legacy_auth,omitempty"`
+	LegacyAuth map[string]AuthState `json:"legacy_auth,omitempty"`
 	// DrawSchedules holds per-account user-defined auto-draw schedules.
 	DrawSchedules map[string][]AutoDrawSchedule `json:"draw_schedules,omitempty"`
-	Actions   map[string]Action        `json:"actions"`
-	Snapshots map[string]Snapshot      `json:"snapshots"`
-	Plans     map[string]AutoDrawPlan  `json:"plans,omitempty"`
-	Logs      []RuntimeLog             `json:"logs,omitempty"`
+	Actions       map[string]Action             `json:"actions"`
+	Snapshots     map[string]Snapshot           `json:"snapshots"`
+	Plans         map[string]AutoDrawPlan       `json:"plans,omitempty"`
+	Logs          []RuntimeLog                  `json:"logs,omitempty"`
 }
 
 // diskStateV3 mirrors the version-3 file shape, where `accounts` held raw
@@ -204,15 +206,15 @@ func Open(path string) (*Store, error) {
 		path:     path,
 		lockFile: lockFile,
 		data: diskState{
-			Version:    version,
-			Accounts:   make(map[string]account.Record),
-			AuthHealth: make(map[string]account.AuthHealth),
-			LegacyAuth: make(map[string]AuthState),
-			Actions:    make(map[string]Action),
-			Snapshots:  make(map[string]Snapshot),
-			Plans:      make(map[string]AutoDrawPlan),
+			Version:       version,
+			Accounts:      make(map[string]account.Record),
+			AuthHealth:    make(map[string]account.AuthHealth),
+			LegacyAuth:    make(map[string]AuthState),
+			Actions:       make(map[string]Action),
+			Snapshots:     make(map[string]Snapshot),
+			Plans:         make(map[string]AutoDrawPlan),
 			DrawSchedules: make(map[string][]AutoDrawSchedule),
-			Logs:       make([]RuntimeLog, 0),
+			Logs:          make([]RuntimeLog, 0),
 		},
 		actionLocks: make(map[string]*actionLock),
 		authLocks:   make(map[string]*actionLock),
@@ -1051,11 +1053,20 @@ func normalizeRuntimeLog(log RuntimeLog) (RuntimeLog, error) {
 		OccurredAt:    occurredAt,
 		AccountID:     accountID,
 		WindowID:      windowID,
+		TaskType:      normalizeAutoTaskType(log.TaskType),
 		Status:        status,
 		Message:       message,
 		PrizeLabel:    prize,
 		QuotaDeltaUSD: copyMoney(log.QuotaDeltaUSD),
 	}, nil
+}
+
+func normalizeAutoTaskType(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value != AutoTaskClaim {
+		return AutoTaskDraw
+	}
+	return value
 }
 
 func normalizeAutoDrawStatus(status AutoDrawPlanStatus) (AutoDrawPlanStatus, error) {

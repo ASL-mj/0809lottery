@@ -255,6 +255,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/accounts", s.handleAccounts)
 	mux.HandleFunc("/api/accounts/", s.handleAccountActions)
+	mux.HandleFunc("/api/bootstrap", s.handleBootstrap)
 	mux.HandleFunc("/api/draw-count/query", s.handleDrawCountQuery)
 	mux.HandleFunc("/api/subscriptions/query", s.handleSubscriptionQuery)
 	mux.HandleFunc("/api/auto-draw-status", s.handleAutoDrawStatus)
@@ -278,6 +279,7 @@ func (s *Server) handleRuntimeLogs(writer http.ResponseWriter, request *http.Req
 		AccountID     string       `json:"account_id"`
 		AccountLabel  string       `json:"account_label,omitempty"`
 		WindowID      string       `json:"window_id"`
+		TaskType      string       `json:"task_type,omitempty"`
 		Status        string       `json:"status"`
 		Message       string       `json:"message"`
 		PrizeLabel    string       `json:"prize_label,omitempty"`
@@ -297,6 +299,7 @@ func (s *Server) handleRuntimeLogs(writer http.ResponseWriter, request *http.Req
 			AccountID:     entry.AccountID,
 			AccountLabel:  label,
 			WindowID:      entry.WindowID,
+			TaskType:      state.NormalizeTaskType(entry.TaskType),
 			Status:        string(entry.Status),
 			Message:       publicRuntimeLogText(entry.Message),
 			PrizeLabel:    publicRuntimeLogText(entry.PrizeLabel),
@@ -322,16 +325,19 @@ func (s *Server) handleAutoDrawStatus(writer http.ResponseWriter, request *http.
 		PlannedAt     *time.Time   `json:"planned_at,omitempty"`
 		ExecutedAt    *time.Time   `json:"executed_at,omitempty"`
 		Status        string       `json:"status"`
+		TaskType      string       `json:"task_type,omitempty"`
 		Message       string       `json:"message,omitempty"`
 		PrizeLabel    string       `json:"prize_label,omitempty"`
 		QuotaDeltaUSD *quota.Money `json:"quota_delta_usd,omitempty"`
 	}
 	type scheduleView struct {
-		ID    string `json:"id"`
-		Kind  string `json:"kind"`
-		Start string `json:"start"`
-		End   string `json:"end,omitempty"`
-		Label string `json:"label"`
+		ID       string `json:"id"`
+		Kind     string `json:"kind"`
+		Start    string `json:"start"`
+		End      string `json:"end,omitempty"`
+		TaskType string `json:"task_type"`
+		Enabled  bool   `json:"enabled"`
+		Label    string `json:"label"`
 	}
 	type accountView struct {
 		AccountID string         `json:"account_id"`
@@ -358,7 +364,8 @@ func (s *Server) handleAutoDrawStatus(writer http.ResponseWriter, request *http.
 			label := service.ScheduleLabel(entry)
 			labels[entry.ID] = label
 			scheduleViews = append(scheduleViews, scheduleView{
-				ID: entry.ID, Kind: entry.Kind, Start: entry.Start, End: entry.End, Label: label,
+				ID: entry.ID, Kind: entry.Kind, Start: entry.Start, End: entry.End,
+				TaskType: state.NormalizeTaskType(entry.TaskType), Enabled: entry.Enabled, Label: label,
 			})
 		}
 		plans := make([]planView, 0, len(plansByAccount[record.ID]))
@@ -369,6 +376,7 @@ func (s *Server) handleAutoDrawStatus(writer http.ResponseWriter, request *http.
 				PlannedAt:     timePointer(plan.PlannedAt),
 				ExecutedAt:    timePointer(plan.ExecutedAt),
 				Status:        string(plan.Status),
+				TaskType:      state.NormalizeTaskType(plan.TaskType),
 				Message:       publicRuntimeLogText(plan.Message),
 				PrizeLabel:    publicRuntimeLogText(plan.PrizeLabel),
 				QuotaDeltaUSD: plan.QuotaDeltaUSD,

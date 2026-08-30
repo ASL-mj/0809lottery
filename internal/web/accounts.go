@@ -14,6 +14,7 @@ import (
 
 	"skyeapi/lottery-bot/internal/account"
 	"skyeapi/lottery-bot/internal/auth"
+	"skyeapi/lottery-bot/internal/lottery"
 	"skyeapi/lottery-bot/internal/quota"
 	"skyeapi/lottery-bot/internal/secret"
 	"skyeapi/lottery-bot/internal/service"
@@ -261,12 +262,14 @@ func (s *Server) handleAccountActions(writer http.ResponseWriter, request *http.
 		}
 		return
 	}
-	if len(parts) != 4 && !(len(parts) == 5 && parts[3] == "sessions") {
+	if len(parts) != 4 && !(len(parts) >= 5 && (parts[3] == "sessions" || parts[3] == "auto-tasks")) {
 		writeError(writer, http.StatusNotFound, "操作不存在")
 		return
 	}
 	action := parts[3]
 	if len(parts) >= 5 && parts[3] == "sessions" {
+		action = action + "/" + strings.Join(parts[4:], "/")
+	} else if len(parts) >= 5 && parts[3] == "auto-tasks" {
 		action = action + "/" + strings.Join(parts[4:], "/")
 	}
 	switch action {
@@ -280,8 +283,13 @@ func (s *Server) handleAccountActions(writer http.ResponseWriter, request *http.
 			writeError(writer, http.StatusMethodNotAllowed, "请求方法不支持")
 			return
 		}
-	case "draw-schedule":
+	case "draw-schedule", "auto-tasks":
 		if request.Method != http.MethodGet && request.Method != http.MethodPut {
+			writeError(writer, http.StatusMethodNotAllowed, "请求方法不支持")
+			return
+		}
+	case "auto-tasks/toggle":
+		if request.Method != http.MethodPost {
 			writeError(writer, http.StatusMethodNotAllowed, "请求方法不支持")
 			return
 		}
@@ -329,6 +337,14 @@ func (s *Server) handleAccountActions(writer http.ResponseWriter, request *http.
 		} else {
 			s.handleDrawSchedulePut(writer, request, record)
 		}
+	case "auto-tasks":
+		if request.Method == http.MethodGet {
+			s.handleAutoTasksGet(writer, request, record)
+		} else {
+			s.handleAutoTasksPut(writer, request, record)
+		}
+	case "auto-tasks/toggle":
+		s.handleAutoTaskToggle(writer, request, record)
 	case "balance":
 		s.handleBalanceAction(writer, request, accountID)
 	case "token-usage":
@@ -713,10 +729,38 @@ func (s *Server) revokeSessions(writer http.ResponseWriter, request *http.Reques
 	payload, err := run(ctx, manager)
 	if err != nil {
 		log.Printf("session revoke failed for account=%s: %v", record.ID, err)
-		writeError(writer, http.StatusBadGateway, "会话撤销暂时失败：认证可能已失效，请先重新认证")
+		writeSessionRevokeError(writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, payload)
+}
+
+func writeSessionRevokeError(writer http.ResponseWriter, err error) {
+	if errors.Is(err, context.DeadlineExceeded) {
+		writeError(writer, http.StatusGatewayTimeout, "会话撤销超时，请稍后重试")
+		return
+	}
+	if errors.Is(err, auth.ErrSessionResultPending) {
+		writeError(writer, http.StatusBadGateway, "会话撤销请求已提交，但结果待确认，请刷新会话列表")
+		return
+	}
+	var apiErr *lottery.APIError
+	if errors.As(err, &apiErr) && apiErr != nil {
+		switch apiErr.StatusCode {
+		case http.StatusUnauthorized, http.StatusForbidden:
+			writeError(writer, http.StatusUnauthorized, "认证已失效，请先重新认证")
+			return
+		case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+			writeError(writer, http.StatusBadGateway, "平台网关暂时不可用，请稍后重试")
+			return
+		default:
+			if apiErr.StatusCode >= 400 && apiErr.StatusCode <= 599 {
+				writeError(writer, http.StatusBadGateway, fmt.Sprintf("平台会话接口返回 HTTP %d", apiErr.StatusCode))
+				return
+			}
+		}
+	}
+	writeError(writer, http.StatusBadGateway, "会话撤销暂时失败，请稍后重试")
 }
 
 // handleSessionCleanup revokes the current cleanup candidates after an
@@ -754,7 +798,7 @@ func (s *Server) handleSessionCleanup(writer http.ResponseWriter, request *http.
 	result, err := cleaner.Cleanup(ctx, record.ID)
 	if err != nil {
 		log.Printf("session cleanup failed for account=%s: %v", record.ID, err)
-		writeError(writer, http.StatusBadGateway, "会话清理暂时失败：认证可能已失效，请先重新认证")
+		writeSessionRevokeError(writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, map[string]interface{}{
@@ -766,6 +810,78 @@ func (s *Server) handleSessionCleanup(writer http.ResponseWriter, request *http.
 
 type drawScheduleRequest struct {
 	Schedules []state.AutoDrawSchedule `json:"schedules"`
+}
+
+type autoTaskToggleRequest struct {
+	TaskID  string `json:"task_id"`
+	Enabled *bool  `json:"enabled"`
+}
+
+func (s *Server) handleAutoTasksGet(writer http.ResponseWriter, request *http.Request, record account.Record) {
+	store, err := s.sharedStore()
+	if err != nil {
+		writeStoreError(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]interface{}{"account_id": record.ID, "tasks": store.DrawSchedules(record.ID)})
+}
+
+func (s *Server) handleAutoTasksPut(writer http.ResponseWriter, request *http.Request, record account.Record) {
+	var input drawScheduleRequest
+	if err := decodeRequest(writer, request, &input); err != nil {
+		writeError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
+	store, err := s.sharedStore()
+	if err != nil {
+		writeStoreError(writer, err)
+		return
+	}
+	saved, err := store.SetDrawSchedules(record.ID, input.Schedules)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, safePublicText(err.Error()))
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]interface{}{"account_id": record.ID, "tasks": saved, "schedules": saved})
+}
+
+func (s *Server) handleAutoTaskToggle(writer http.ResponseWriter, request *http.Request, record account.Record) {
+	var input autoTaskToggleRequest
+	if err := decodeRequest(writer, request, &input); err != nil {
+		writeError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
+	input.TaskID = strings.TrimSpace(input.TaskID)
+	if input.TaskID == "" || input.Enabled == nil {
+		writeError(writer, http.StatusBadRequest, "任务切换需要 task_id 和 enabled")
+		return
+	}
+	store, err := s.sharedStore()
+	if err != nil {
+		writeStoreError(writer, err)
+		return
+	}
+	entries := store.DrawSchedules(record.ID)
+	found := false
+	for index := range entries {
+		if entries[index].ID != input.TaskID {
+			continue
+		}
+		entries[index].Enabled = *input.Enabled
+		entries[index].TaskType = state.NormalizeTaskType(entries[index].TaskType)
+		found = true
+		break
+	}
+	if !found {
+		writeError(writer, http.StatusNotFound, "自动任务不存在")
+		return
+	}
+	saved, err := store.SetDrawSchedules(record.ID, entries)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, safePublicText(err.Error()))
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]interface{}{"account_id": record.ID, "task_id": input.TaskID, "enabled": *input.Enabled, "tasks": saved})
 }
 
 func (s *Server) handleDrawScheduleGet(writer http.ResponseWriter, request *http.Request, record account.Record) {

@@ -1,6 +1,7 @@
 package state
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -16,6 +17,14 @@ const (
 	AutoDrawScheduleRandom = "random"
 )
 
+// AutoTaskType identifies the side effect performed by an automatic task.
+// Empty values are normalized to draw for compatibility with the original
+// auto-draw schedule format.
+const (
+	AutoTaskDraw  = "draw"
+	AutoTaskClaim = "claim"
+)
+
 const (
 	maxDrawSchedulesPerAccount = 12
 	drawScheduleIDPrefix       = "sched-"
@@ -25,10 +34,34 @@ const (
 // are Beijing time (Asia/Shanghai) HH:MM strings. A fixed entry draws once at
 // Start; a random entry draws once at a random second within [Start, End).
 type AutoDrawSchedule struct {
-	ID    string `json:"id"`
-	Kind  string `json:"kind"`
-	Start string `json:"start"`
-	End   string `json:"end,omitempty"`
+	ID         string `json:"id"`
+	Kind       string `json:"kind"`
+	Start      string `json:"start"`
+	End        string `json:"end,omitempty"`
+	TaskType   string `json:"task_type,omitempty"`
+	Enabled    bool   `json:"enabled"`
+	enabledSet bool   `json:"-"`
+}
+
+// UnmarshalJSON records whether enabled was present so legacy schedules can
+// default to enabled without making an explicit enabled:false impossible.
+func (s *AutoDrawSchedule) UnmarshalJSON(data []byte) error {
+	type alias AutoDrawSchedule
+	var raw struct {
+		alias
+		Enabled *bool `json:"enabled"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*s = AutoDrawSchedule(raw.alias)
+	if raw.Enabled != nil {
+		s.Enabled = *raw.Enabled
+		s.enabledSet = true
+	} else {
+		s.Enabled = true
+	}
+	return nil
 }
 
 // DrawSchedules returns the persisted schedule entries for one account.
@@ -85,6 +118,13 @@ func (s *Store) SetDrawSchedules(accountID string, entries []AutoDrawSchedule) (
 }
 
 func normalizeDrawSchedule(entry AutoDrawSchedule, usedIDs map[string]bool) (AutoDrawSchedule, error) {
+	taskType := strings.ToLower(strings.TrimSpace(entry.TaskType))
+	if taskType == "" {
+		taskType = AutoTaskDraw
+	}
+	if taskType != AutoTaskDraw && taskType != AutoTaskClaim {
+		return AutoDrawSchedule{}, fmt.Errorf("自动任务类型仅支持 draw 或 claim")
+	}
 	kind := strings.ToLower(strings.TrimSpace(entry.Kind))
 	if kind != AutoDrawScheduleFixed && kind != AutoDrawScheduleRandom {
 		return AutoDrawSchedule{}, fmt.Errorf("抽奖计划类型仅支持 fixed 或 random")
@@ -93,7 +133,11 @@ func normalizeDrawSchedule(entry AutoDrawSchedule, usedIDs map[string]bool) (Aut
 	if err != nil {
 		return AutoDrawSchedule{}, fmt.Errorf("开始时间无效：%w", err)
 	}
-	normalized := AutoDrawSchedule{ID: strings.TrimSpace(entry.ID), Kind: kind, Start: start}
+	enabled := entry.Enabled
+	if !entry.enabledSet && entry.TaskType == "" {
+		enabled = true
+	}
+	normalized := AutoDrawSchedule{ID: strings.TrimSpace(entry.ID), Kind: kind, Start: start, TaskType: taskType, Enabled: enabled, enabledSet: true}
 	switch kind {
 	case AutoDrawScheduleFixed:
 		if strings.TrimSpace(entry.End) != "" {
@@ -121,6 +165,16 @@ func normalizeDrawSchedule(entry AutoDrawSchedule, usedIDs map[string]bool) (Aut
 	}
 	usedIDs[normalized.ID] = true
 	return normalized, nil
+}
+
+// NormalizeTaskType returns a supported task type, defaulting legacy values
+// to draw.
+func NormalizeTaskType(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == AutoTaskClaim {
+		return value
+	}
+	return AutoTaskDraw
 }
 
 // normalizeClock validates and canonicalizes an HH:MM string.

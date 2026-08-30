@@ -16,7 +16,8 @@
     .layout__main { min-width:0; }
     .layout__side { min-width:0; position:sticky; top:24px; padding-top:18px; }
     header { display:flex; align-items:flex-end; justify-content:space-between; gap:28px; padding:0 2px 22px; border-bottom:1px solid var(--line-strong); }
-    h1 { margin:0; font-size:24px; line-height:1.2; font-weight:720; letter-spacing:0; }
+    h1 { display:flex; align-items:center; gap:9px; margin:0; font-size:24px; line-height:1.2; font-weight:720; letter-spacing:0; }
+    .brand-mark { width:26px; height:26px; flex:none; }
     header p { margin:5px 0 0; color:var(--muted); font-size:13px; }
     .header-actions { display:flex; align-items:center; justify-content:flex-end; gap:12px; }
     .page-note { color:var(--muted); font-size:12px; white-space:nowrap; }
@@ -208,12 +209,18 @@
     .plan-settings svg, .subscription-refresh svg { width:12px; height:12px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
     .plan-list, .subscription-list { display:grid; gap:6px; }
     .plan-list { margin:0; padding:0; list-style:none; }
-    .plan-row, .subscription-item { min-width:0; display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:8px; align-items:center; padding:8px 9px; border:1px solid var(--line); border-radius:5px; background:var(--paper); }
+    .plan-row, .subscription-item { min-width:0; display:grid; grid-template-columns:minmax(0,1fr) auto auto auto; gap:8px; align-items:center; padding:8px 9px; border:1px solid var(--line); border-radius:5px; background:var(--paper); }
     .plan-row__main { min-width:0; }
     .plan-row__mode { display:block; margin-top:2px; color:#8b8b86; font-size:9px; line-height:1.2; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .plan-row__time { display:block; min-width:0; color:var(--ink); font-size:11px; font-weight:650; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .plan-row__status { color:var(--ok); font-size:10px; font-weight:650; white-space:nowrap; }
     .plan-row__status--pending { color:#8b5d24; }
+    .plan-row__task { color:var(--muted); font-size:10px; white-space:nowrap; }
+    .task-switch { position:relative; display:inline-flex; align-items:center; width:34px; height:20px; padding:0; border:0; border-radius:999px; background:#c5c5c0; cursor:pointer; transition:background-color 160ms ease; }
+    .task-switch::after { content:""; width:16px; height:16px; margin-left:2px; border-radius:50%; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.18); transition:transform 160ms ease; }
+    .task-switch[aria-checked="true"] { background:#4e8a61; }
+    .task-switch[aria-checked="true"]::after { transform:translateX(14px); }
+    .task-switch:focus-visible { outline:2px solid var(--ink); outline-offset:2px; }
     .subscription-item { grid-template-columns:minmax(0,1fr) auto; }
     .subscription-item__name { min-width:0; color:var(--ink); font-size:11px; font-weight:650; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .subscription-item__meta { margin-top:2px; color:#8b8b86; font-size:9px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -273,7 +280,7 @@
 </head>
 <body>
   <main>
-    <header><div><h1>0809 账号工作台</h1><p>每个账号独立管理与查询。认证材料仅在服务端状态文件中使用。</p></div><div class="header-actions"><div id="admin-logout-error" class="page-note" role="status" aria-live="polite"></div><div class="page-note">额度统一以美元显示</div><button id="admin-logout" class="action action--compact" type="button">退出登录</button></div></header>
+    <header><div><h1><svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="11" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="16" cy="16" r="5" fill="none" stroke="currentColor" stroke-width="2"/></svg>星额台</h1><p>多账号额度、订阅与任务配置。</p></div><div class="header-actions"><div id="admin-logout-error" class="page-note" role="status" aria-live="polite"></div><div class="page-note">额度统一以美元显示</div><button id="admin-logout" class="action action--compact" type="button">退出登录</button></div></header>
     <div class="layout">
       <div class="layout__main">
         <nav class="account-tabs" id="account-tabs" aria-label="账号切换"></nav>
@@ -302,10 +309,11 @@
   </dialog>
   <dialog id="schedule-dialog" class="account-dialog schedule-dialog">
     <form>
-      <h3>设置自动抽奖</h3>
+      <h3>设置自动任务</h3>
       <p class="schedule-dialog__hint">账号：<strong id="schedule-dialog-account"></strong></p>
       <div class="schedule-dialog__fields">
-        <label>计划类型<select id="schedule-dialog-kind"><option value="fixed">固定时间</option><option value="random">时段随机</option></select></label>
+        <label>任务类型<select id="schedule-dialog-task"><option value="draw">自动抽奖</option><option value="claim">领取每日抽奖次数</option></select></label>
+        <label>执行方式<select id="schedule-dialog-kind"><option value="fixed">固定时间</option><option value="random">时段随机</option></select></label>
         <label>开始时间<input id="schedule-dialog-start" type="time" required></label>
         <label id="schedule-dialog-end-label">结束时间<input id="schedule-dialog-end" type="time"></label>
       </div>
@@ -342,6 +350,7 @@
       <div class="account-dialog__row"><button type="button" class="action" id="delete-dialog-cancel">取消</button><button type="submit" class="action action--danger">删除</button></div>
     </form>
   </dialog>
+  <!-- Legacy API compatibility: draw-schedule remains supported by the server. -->
   <script>
     const state = { accounts: [], activeAccountId: null, runtimeLogs: [], logsLoading: false, logsError: '', autoDrawLoading: false };
     const root = document.querySelector('#accounts');
@@ -558,7 +567,7 @@
         balance_error: '',
         token_usage_result: null,
         token_usage_error: '',
-        draw_schedules: [],
+        draw_schedules: Array.isArray(account.draw_schedules) ? account.draw_schedules : (Array.isArray(account.tasks) ? account.tasks : []),
         purchasing_draw: false,
         unlocking_pass: false,
         activity_result: null,
@@ -566,7 +575,7 @@
         draw_history_result: null,
         draw_history_error: '',
         querying_draw_history: false,
-        auto_draw: null,
+        auto_draw: account.auto_draw || (Array.isArray(account.auto_draw_plans) ? { plans: account.auto_draw_plans } : null),
         auto_draw_error: '',
         footer_message: '',
         footer_tone: '',
@@ -604,12 +613,13 @@
       return { tone: 'pending', label: plannedAt ? `计划 ${plannedAt}` : '计划待生成' };
     }
     function scheduleEntries(account) {
+      if (Array.isArray(account.auto_tasks) && account.auto_tasks.length) return account.auto_tasks;
       if (Array.isArray(account.auto_draw?.schedules) && account.auto_draw.schedules.length) return account.auto_draw.schedules;
       return Array.isArray(account.draw_schedules) ? account.draw_schedules : [];
     }
     function renderAutoDrawSchedule(account) {
       const entries = scheduleEntries(account);
-      const plansBySchedule = new Map((Array.isArray(account.auto_draw?.plans) ? account.auto_draw.plans : []).map((plan) => [plan.schedule_id, plan]));
+      const plansBySchedule = new Map((Array.isArray(account.auto_draw?.plans) ? account.auto_draw.plans : (Array.isArray(account.auto_draw_plans) ? account.auto_draw_plans : [])).map((plan) => [plan.schedule_id || plan.window_id, plan]));
       const handled = entries.filter((entry) => {
         const plan = plansBySchedule.get(entry.id);
         return plan && ['completed', 'skipped', 'failed'].includes(String(plan.status).toLowerCase());
@@ -618,13 +628,14 @@
         const plan = plansBySchedule.get(entry.id);
         const display = plan ? autoDrawPlanDisplay(plan) : { tone: 'pending', label: '计划待生成' };
         const mode = entry.kind === 'random' ? '时段随机' : '固定时间';
-        const cadence = entry.kind === 'random' ? '时段内每天一次' : '每天一次';
+        const cadence = entry.task_type === 'claim' ? '领取次数' : '自动抽奖';
         const statusClass = display.tone === 'pending' ? ' plan-row__status--pending' : '';
-        return `<li class="plan-row"><div class="plan-row__main"><strong class="plan-row__time">${escapeHTML(entry.label || formatScheduleLabel(entry))}</strong><span class="plan-row__mode">${mode} · ${cadence}</span></div><span class="plan-row__status${statusClass}">${escapeHTML(display.label)}</span><button class="action action--compact" type="button" data-schedule-remove="${escapeHTML(account.id)}" data-schedule-id="${escapeHTML(entry.id)}">移除</button></li>`;
+        const enabled = entry.enabled !== false;
+        return `<li class="plan-row"><div class="plan-row__main"><strong class="plan-row__time">${escapeHTML(entry.label || formatScheduleLabel(entry))}</strong><span class="plan-row__mode">${mode} · ${cadence}</span></div><span class="plan-row__status${statusClass}">${escapeHTML(display.label)}</span><button class="task-switch" role="switch" aria-checked="${enabled ? 'true' : 'false'}" aria-label="${enabled ? '停用' : '启用'}自动任务" data-task-toggle="${escapeHTML(account.id)}" data-task-id="${escapeHTML(entry.id)}" data-enabled="${enabled ? 'false' : 'true'}"></button><button class="action action--compact" type="button" data-schedule-remove="${escapeHTML(account.id)}" data-schedule-id="${escapeHTML(entry.id)}">移除</button></li>`;
       }).join('');
-      const list = entries.length ? `<ul class="plan-list">${items}</ul>` : '<p class="auto-draw__empty">暂无计划，请点击右上角设置自动抽奖。</p>';
+      const list = entries.length ? `<ul class="plan-list">${items}</ul>` : '<p class="auto-draw__empty">暂无自动任务，请点击右上角设置。</p>';
       const error = account.auto_draw_error ? `<div class="auto-draw__error">计划更新失败：${escapeHTML(account.auto_draw_error)}</div>` : '';
-      return `<section class="auto-draw" aria-label="自动抽奖计划">${entries.length ? `<div class="auto-draw__head"><span class="auto-draw__summary">今日已完成 ${handled}/${entries.length}</span></div>` : ''}${list}${error}</section>`;
+      return `<section class="auto-draw" aria-label="自动任务">${entries.length ? `<div class="auto-draw__head"><span class="auto-draw__summary">今日已完成 ${handled}/${entries.length}</span></div>` : ''}${list}${error}</section>`;
     }
     function usageData(account) {
       if (account.balance_result) return account.balance_result;
@@ -866,7 +877,7 @@
         : '';
       const reward = account.checkin_quota_awarded;
       const rewardMarker = account.checkin_status === 'completed' && reward?.state === 'confirmed' ? `<span class="status-line__reward">今日签到 +${escapeHTML(formatAward(reward))}</span>` : '';
-      return `<div class="status-line"><span class="status-line__dot" aria-hidden="true"></span><span class="status-line__text">自动抽奖：${scheduleText}${nextText}${activityHint}</span>${rewardMarker}<span class="status-line__link">运行日志</span></div>`;
+      return `<div class="status-line"><span class="status-line__dot" aria-hidden="true"></span><span class="status-line__text">自动任务：${scheduleText}${nextText}${activityHint}</span>${rewardMarker}<span class="status-line__link">运行日志</span></div>`;
     }
     function renderAccount(account) {
       const result = account.result || snapshotData(account);
@@ -881,7 +892,7 @@
       else if (!result) subscriptionBody = '<p class="empty">尚未查询订阅。</p>';
       else if (!subscriptions.length) subscriptionBody = '<p class="empty">当前无有效订阅。</p>';
       else subscriptionBody = subscriptions.map(renderSubscription).join('');
-      const details = `<div class="details details-split"><section class="details-column"><div class="plan-column-head"><h3 class="details__title">自动抽奖计划</h3><button class="plan-settings" type="button" data-focus-schedule="${escapeHTML(account.id)}" aria-label="设置自动抽奖" title="设置自动抽奖">${icons.edit}设置自动抽奖</button></div>${renderAutoDrawSchedule(account)}</section>${renderDrawHistory(account)}<section class="details-column"><div class="subscription-column-head"><h3 class="details__title">${escapeHTML(subscriptionMeta)}</h3><button class="subscription-refresh" type="button" data-refresh="${escapeHTML(account.id)}" aria-label="刷新订阅" title="刷新订阅" ${account.refreshing ? 'disabled' : ''}>${icons.refresh}<span>${refreshText}</span></button></div><div class="subscription-list">${subscriptionBody}</div></section></div>`;
+      const details = `<div class="details details-split"><section class="details-column"><div class="plan-column-head"><h3 class="details__title">自动任务</h3><button class="plan-settings" type="button" data-focus-schedule="${escapeHTML(account.id)}" aria-label="设置自动任务" title="设置自动任务">${icons.edit}设置自动任务</button></div>${renderAutoDrawSchedule(account)}</section>${renderDrawHistory(account)}<section class="details-column"><div class="subscription-column-head"><h3 class="details__title">${escapeHTML(subscriptionMeta)}</h3><button class="subscription-refresh" type="button" data-refresh="${escapeHTML(account.id)}" aria-label="刷新订阅" title="刷新订阅" ${account.refreshing ? 'disabled' : ''}>${icons.refresh}<span>${refreshText}</span></button></div><div class="subscription-list">${subscriptionBody}</div></section></div>`;
       const metrics = `<div class="account__body"><div class="metrics-groups">${renderBalance(account)}${renderTokenUsage(account)}${renderDrawCount(account)}${renderActivity(account)}</div></div>`;
       const lower = `${renderPurchaseActions(account)}${renderStatusLine(account)}${details}`;
       const footer = footerState(account, result, error);
@@ -940,13 +951,33 @@
       root.innerHTML = renderAccount(active);
       restoreFocus(focusTarget);
     }
-    async function loadRuntimeLogs(renderAccount = false) {
+    const requestCache = new Map();
+    const requestInFlight = new Map();
+    function invalidateCachedRequests(prefix) {
+      for (const key of requestCache.keys()) {
+        if (key.endsWith(`:${prefix}`) || key.includes(`:${prefix}:`)) requestCache.delete(key);
+      }
+    }
+    async function cachedRequest(url, options = {}, ttl = 30000, force = false) {
+      const method = (options.method || 'GET').toUpperCase();
+      const key = `${method}:${url}:${options.body || ''}`;
+      const cached = requestCache.get(key);
+      if (!force && cached && cached.expiresAt > Date.now()) return cached.value;
+      if (requestInFlight.has(key)) return requestInFlight.get(key);
+      const promise = request(url, options).then((value) => {
+        requestCache.set(key, { value, expiresAt: Date.now() + ttl });
+        return value;
+      }).finally(() => requestInFlight.delete(key));
+      requestInFlight.set(key, promise);
+      return promise;
+    }
+    async function loadRuntimeLogs(renderAccount = false, force = false) {
       if (state.logsLoading) return;
       state.logsLoading = true;
       state.logsError = '';
       renderRuntimeLogs();
       try {
-        const payload = await request('/api/runtime-logs');
+        const payload = await cachedRequest('/api/runtime-logs', {}, 30000, force);
         state.runtimeLogs = Array.isArray(payload.logs) ? payload.logs : [];
       } catch (error) {
         state.logsError = error.message;
@@ -959,11 +990,11 @@
     async function loadDrawHistories() {
       await Promise.all(state.accounts.map((account) => refreshDrawHistoryOnly(account)));
     }
-    async function refreshAutoDrawStatus() {
+    async function refreshAutoDrawStatus(force = false) {
       if (state.autoDrawLoading) return;
       state.autoDrawLoading = true;
       try {
-        const payload = await request('/api/auto-draw-status');
+        const payload = await cachedRequest('/api/auto-draw-status', {}, 30000, force);
         const reports = new Map((Array.isArray(payload?.accounts) ? payload.accounts : []).map((item) => [item.account_id, item]));
         state.accounts.forEach((account) => {
           const report = reports.get(account.id);
@@ -1287,6 +1318,7 @@
       scheduleDialog.dataset.accountId = account.id;
       document.querySelector('#schedule-dialog-account').textContent = account.label || account.id;
       document.querySelector('#schedule-dialog-kind').value = 'fixed';
+      document.querySelector('#schedule-dialog-task').value = 'draw';
       document.querySelector('#schedule-dialog-start').value = '';
       document.querySelector('#schedule-dialog-end').value = '';
       document.querySelector('#schedule-dialog-error').textContent = '';
@@ -1299,36 +1331,38 @@
       const account = findAccount(id);
       if (!account || account.saving_schedule) return;
       const kind = document.querySelector('#schedule-dialog-kind').value;
+      const taskType = document.querySelector('#schedule-dialog-task').value;
       const start = document.querySelector('#schedule-dialog-start').value;
       const end = document.querySelector('#schedule-dialog-end').value;
       const errorNode = document.querySelector('#schedule-dialog-error');
       if (!start) { errorNode.textContent = '请选择开始时间'; return; }
       if (kind === 'random' && (!end || end <= start)) { errorNode.textContent = '时段随机需要设置晚于开始时间的结束时间'; return; }
-      const entry = kind === 'random' ? { kind, start, end } : { kind, start };
-      if (!account.auto_draw) await refreshAutoDrawStatus();
-      const existing = scheduleEntries(account).map(({ id: entryID, kind: entryKind, start: entryStart, end: entryEnd }) => ({ id: entryID, kind: entryKind, start: entryStart, end: entryEnd }));
+      const entry = kind === 'random' ? { kind, start, end, task_type: taskType, enabled: true } : { kind, start, task_type: taskType, enabled: true };
+      const existing = scheduleEntries(account).map(({ id: entryID, kind: entryKind, start: entryStart, end: entryEnd, task_type: existingTaskType, enabled: existingEnabled }) => ({ id: entryID, kind: entryKind, start: entryStart, end: entryEnd, task_type: existingTaskType || 'draw', enabled: existingEnabled !== false }));
       account.saving_schedule = true;
       errorNode.textContent = '';
       document.querySelector('#schedule-dialog-submit').disabled = true;
       document.querySelector('#schedule-dialog-submit').textContent = '保存中';
       try {
-        const payload = await request(`/api/accounts/${encodeURIComponent(id)}/draw-schedule`, {
+        const payload = await request(`/api/accounts/${encodeURIComponent(id)}/auto-tasks`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ schedules: [...existing, entry] }),
         });
-        account.draw_schedules = payload.schedules || [];
-        setFooter(account, '定时抽奖计划已保存', 'ok');
+        account.draw_schedules = payload.tasks || payload.schedules || [];
+        account.auto_tasks = account.draw_schedules;
+        invalidateCachedRequests('/api/auto-draw-status');
+        setFooter(account, '自动任务已保存', 'ok');
         closeDialog(scheduleDialog);
       } catch (error) {
-        setFooter(account, `定时抽奖计划保存失败：${error.message}`, 'error');
+        setFooter(account, `自动任务保存失败：${error.message}`, 'error');
         errorNode.textContent = error.message;
       } finally {
         account.saving_schedule = false;
         document.querySelector('#schedule-dialog-submit').disabled = false;
         document.querySelector('#schedule-dialog-submit').textContent = '添加计划';
         render();
-        await refreshAutoDrawStatus();
+        await refreshAutoDrawStatus(true);
         focusStatus(account.id);
       }
     }
@@ -1340,20 +1374,22 @@
       try {
         const remaining = scheduleEntries(account)
           .filter((entry) => entry.id !== scheduleID)
-          .map(({ id: entryID, kind: entryKind, start: entryStart, end: entryEnd }) => ({ id: entryID, kind: entryKind, start: entryStart, end: entryEnd }));
-        const payload = await request(`/api/accounts/${encodeURIComponent(id)}/draw-schedule`, {
+          .map(({ id: entryID, kind: entryKind, start: entryStart, end: entryEnd, task_type: existingTaskType, enabled: existingEnabled }) => ({ id: entryID, kind: entryKind, start: entryStart, end: entryEnd, task_type: existingTaskType || 'draw', enabled: existingEnabled !== false }));
+        const payload = await request(`/api/accounts/${encodeURIComponent(id)}/auto-tasks`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ schedules: remaining }),
         });
-        account.draw_schedules = payload.schedules || [];
-        setFooter(account, '定时抽奖计划已更新', 'ok');
+        account.draw_schedules = payload.tasks || payload.schedules || [];
+        account.auto_tasks = account.draw_schedules;
+        invalidateCachedRequests('/api/auto-draw-status');
+        setFooter(account, '自动任务已更新', 'ok');
       } catch (error) {
         setFooter(account, `定时抽奖计划更新失败：${error.message}`, 'error');
       } finally {
         account.saving_schedule = false;
         render();
-        await refreshAutoDrawStatus();
+        await refreshAutoDrawStatus(true);
         focusStatus(account.id);
       }
     }
@@ -1369,9 +1405,37 @@
         render();
       }
     }
+    async function toggleAutoTask(id, taskID, enabled, button) {
+      const account = findAccount(id);
+      if (!account || account.saving_schedule) return;
+      account.saving_schedule = true;
+      if (button) button.disabled = true;
+      try {
+        const payload = await request(`/api/accounts/${encodeURIComponent(id)}/auto-tasks/toggle`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ task_id: taskID, enabled }),
+        });
+        account.draw_schedules = payload.tasks || [];
+        account.auto_tasks = account.draw_schedules;
+        invalidateCachedRequests('/api/auto-draw-status');
+        setFooter(account, enabled ? '自动任务已启用' : '自动任务已停用', 'ok');
+      } catch (error) {
+        setFooter(account, `自动任务切换失败：${error.message}`, 'error');
+      } finally {
+        account.saving_schedule = false;
+        render();
+        await refreshAutoDrawStatus(true);
+      }
+    }
     root.addEventListener('click', async (event) => {
       const manage = event.target.closest('[data-add-account],[data-edit-account],[data-validate-auth],[data-reauthenticate],[data-session-preview],[data-delete-account]');
       if (manage) { handleManagementAction(manage); return; }
+      const taskToggle = event.target.closest('[data-task-toggle]');
+      if (taskToggle) {
+        toggleAutoTask(taskToggle.dataset.taskToggle, taskToggle.dataset.taskId, taskToggle.dataset.enabled === 'true', taskToggle);
+        return;
+      }
       const schedule = event.target.closest('[data-schedule-remove]');
       if (schedule) {
         scheduleRemove(schedule.dataset.scheduleRemove, schedule.dataset.scheduleId);
@@ -1405,7 +1469,7 @@
       else if (button.dataset.unlockPass) unlockPass(button.dataset.unlockPass);
     });
     logsRefreshButton.addEventListener('click', () => {
-      if (!state.logsLoading) loadRuntimeLogs();
+      if (!state.logsLoading) loadRuntimeLogs(false, true);
     });
     function renderSessionPreview(preview) {
       if (!preview) return '<div class="preview-state">会话预览不可用。</div>';
@@ -1582,13 +1646,12 @@
       window.location.replace('/login?next=%2F');
     });
     async function loadAccounts() {
-      const payload = await request('/api/accounts');
+      const payload = await request('/api/bootstrap');
       const previous = state.activeAccountId;
       state.accounts = Array.isArray(payload?.accounts) ? payload.accounts.map(hydrateAccount) : [];
       state.activeAccountId = state.accounts.some((item) => item.id === previous) ? previous : (state.accounts[0]?.id || null);
+      state.runtimeLogs = Array.isArray(payload?.logs) ? payload.logs : [];
       render();
-      await refreshAutoDrawStatus();
-      await loadDrawHistories();
     }
     renderRuntimeLogs();
     loadAccounts().catch((error) => {
