@@ -171,3 +171,77 @@ func TestRemoveAccountScopedStateOnlyTouchesOneAccount(t *testing.T) {
 		t.Fatalf("logs after scoped removal = %#v", logs)
 	}
 }
+
+// New accounts receive sequential letter+digit codes: A1…A9 then B1…, legacy
+// account-a…account-e IDs are ignored by the sequence, and codes are never
+// reused after deletions.
+func TestCreateAccountSequentialIDs(t *testing.T) {
+	store := testStore(t)
+	defer store.Close()
+	registry := store.AccountRegistry()
+
+	// Legacy-style IDs must not participate in the sequence.
+	for _, legacy := range []string{"account-a", "account-b", "account-c", "account-d"} {
+		if _, err := registry.Create(account.Record{ID: legacy, Label: legacy, MaskedLoginName: "l***@example.test", Status: account.StatusEnabled}); err != nil {
+			t.Fatalf("seed legacy %s: %v", legacy, err)
+		}
+	}
+
+	want := []string{"account-a1", "account-a2", "account-a3", "account-a4", "account-a5",
+		"account-a6", "account-a7", "account-a8", "account-a9", "account-b1", "account-b2"}
+	for _, id := range want {
+		if _, err := registry.Create(account.Record{Label: "新账号", MaskedLoginName: "n***@example.test", Status: account.StatusEnabled}); err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+		records, err := registry.List()
+		if err != nil {
+			t.Fatalf("List() error = %v", err)
+		}
+		if records[len(records)-1].ID != id {
+			t.Fatalf("newest account = %q, want %q", records[len(records)-1].ID, id)
+		}
+	}
+
+	// Deleted codes are never reused.
+	last := want[len(want)-1]
+	if err := registry.Delete(last); err != nil {
+		t.Fatalf("Delete(%s) error = %v", last, err)
+	}
+	next, err := registry.Create(account.Record{Label: "再账号", MaskedLoginName: "n***@example.test", Status: account.StatusEnabled})
+	if err != nil {
+		t.Fatalf("Create() after delete error = %v", err)
+	}
+	if next.ID != "account-b3" {
+		t.Fatalf("post-delete ID = %q, want account-b3", next.ID)
+	}
+}
+
+// The account list sorts by creation time ascending: newly added accounts are
+// always last.
+func TestAccountRegistryListsByCreationOrder(t *testing.T) {
+	store := testStore(t)
+	defer store.Close()
+	registry := store.AccountRegistry()
+
+	first, err := registry.Create(account.Record{Label: "最早", MaskedLoginName: "f***@example.test", Status: account.StatusEnabled})
+	if err != nil {
+		t.Fatalf("Create(first) error = %v", err)
+	}
+	second, err := registry.Create(account.Record{Label: "其次", MaskedLoginName: "s***@example.test", Status: account.StatusEnabled})
+	if err != nil {
+		t.Fatalf("Create(second) error = %v", err)
+	}
+	legacy, err := registry.Create(account.Record{ID: "account-a", Label: "迁移号", MaskedLoginName: "a***@example.test", Status: account.StatusEnabled})
+	if err != nil {
+		t.Fatalf("Create(legacy) error = %v", err)
+	}
+
+	records, err := registry.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	got := []string{records[0].ID, records[1].ID, records[2].ID}
+	if got[0] != first.ID || got[1] != second.ID || got[2] != legacy.ID {
+		t.Fatalf("list order = %v, want creation order %v", got, []string{first.ID, second.ID, legacy.ID})
+	}
+}

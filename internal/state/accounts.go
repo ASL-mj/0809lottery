@@ -1,11 +1,10 @@
 package state
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -48,8 +47,38 @@ func (r *AccountRegistry) listLocked() []account.Record {
 	for _, record := range r.store.data.Accounts {
 		records = append(records, record)
 	}
-	sort.Slice(records, func(left, right int) bool { return records[left].ID < records[right].ID })
+	// Newest accounts sort last: creation time ascending, ID as tiebreak for
+	// records created in the same instant.
+	sort.Slice(records, func(left, right int) bool {
+		if !records[left].CreatedAt.Equal(records[right].CreatedAt) {
+			return records[left].CreatedAt.Before(records[right].CreatedAt)
+		}
+		return records[left].ID < records[right].ID
+	})
 	return records
+}
+
+// nextSequentialAccountID returns the next code after the persisted
+// watermark. On first use the watermark is seeded from the highest existing
+// sequential ID so codes created before the watermark never collide.
+func (r *AccountRegistry) nextSequentialAccountID() (string, error) {
+	watermark := r.store.data.AccountIDSeq
+	if watermark == "" {
+		maxLetter, maxDigit := 0, 0
+		for id := range r.store.data.Accounts {
+			suffix := strings.TrimPrefix(id, "account-")
+			if len(suffix) == 2 && suffix[0] >= 'a' && suffix[0] <= 'z' && suffix[1] >= '1' && suffix[1] <= '9' {
+				letter, digit := int(suffix[0]-'a'), int(suffix[1]-'0')
+				if letter > maxLetter || (letter == maxLetter && digit > maxDigit) {
+					maxLetter, maxDigit = letter, digit
+				}
+			}
+		}
+		if maxLetter > 0 || maxDigit > 0 {
+			watermark = "account-" + string(rune('a'+maxLetter)) + strconv.Itoa(maxDigit)
+		}
+	}
+	return newAccountID(watermark)
 }
 
 func (r *AccountRegistry) Get(id string) (account.Record, error) {
@@ -67,7 +96,7 @@ func (r *AccountRegistry) Create(record account.Record) (account.Record, error) 
 	defer r.store.mu.Unlock()
 
 	if strings.TrimSpace(record.ID) == "" {
-		id, err := newAccountID()
+		id, err := r.nextSequentialAccountID()
 		if err != nil {
 			return account.Record{}, err
 		}
@@ -89,9 +118,12 @@ func (r *AccountRegistry) Create(record account.Record) (account.Record, error) 
 	now := time.Now().UTC()
 	record.CreatedAt = now
 	record.UpdatedAt = now
+	previousSeq := r.store.data.AccountIDSeq
+	r.store.data.AccountIDSeq = record.ID
 	r.store.data.Accounts[record.ID] = record
 	if err := r.store.persistLocked(); err != nil {
 		delete(r.store.data.Accounts, record.ID)
+		r.store.data.AccountIDSeq = previousSeq
 		return account.Record{}, err
 	}
 	return record, nil
@@ -179,13 +211,37 @@ func (r *AccountRegistry) ensureRemoteUserIDFreeLocked(accountID string, userID 
 	return nil
 }
 
-func newAccountID() (string, error) {
-	var value [8]byte
-	if _, err := rand.Read(value[:]); err != nil {
-		return "", fmt.Errorf("generate account ID: %w", err)
+// newAccountID advances the persisted sequential watermark to the next
+// "letter + digit" account code: account-a1 … account-a9, then account-b1 …
+// account-z9. The watermark (not the live set) drives allocation, so deleted
+// codes are never reused. Legacy account-a…account-e IDs carry no digit and
+// are ignored when the watermark is first initialized.
+func newAccountID(watermark string) (string, error) {
+	letter, digit := 0, 0
+	if watermark != "" {
+		suffix := strings.TrimPrefix(watermark, "account-")
+		if len(suffix) == 2 && suffix[0] >= 'a' && suffix[0] <= 'z' && suffix[1] >= '1' && suffix[1] <= '9' {
+			letter, digit = int(suffix[0]-'a'), int(suffix[1]-'0')
+		}
 	}
-	return "account-" + hex.EncodeToString(value[:]), nil
+	digit++
+	if digit > 9 {
+		letter++
+		digit = 1
+	}
+	if letter > 'z'-'a' {
+		return "", fmt.Errorf("sequential account IDs are exhausted (a1 through z9)")
+	}
+	return "account-" + string(rune('a'+letter)) + strconv.Itoa(digit), nil
 }
+
+// nextSequentialAccountID returns the next code after the persisted
+// watermark, seeding it from the highest existing sequential ID on first use.
+func (s *Store) nextSequentialAccountID() (string, error) {
+	return newAccountID(s.data.AccountIDSeq)
+}
+
+const maxAccountID = "account-z9"
 
 // AuthHealth returns the sanitized authentication health of one account.
 func (s *Store) AuthHealth(accountID string) account.AuthHealth {

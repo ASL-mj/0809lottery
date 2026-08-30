@@ -6,7 +6,7 @@
   <title>星额台</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23171717'/%3E%3Ccircle cx='16' cy='16' r='11' fill='none' stroke='%23ffffff' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='5' fill='none' stroke='%23ffffff' stroke-width='2'/%3E%3C/svg%3E">
   <style>
-    :root { --ink:#171717; --muted:#6f6f6b; --line:#ddddda; --line-strong:#c8c8c3; --paper:#fff; --surface:#f4f4f1; --soft:#fafaf8; --ok:#27613e; --ok-bg:#f1f8f3; --ok-line:#9cc4aa; --error:#9d3535; }
+    :root { --ink:#171717; --muted:#6f6f6b; --line:#ddddda; --line-strong:#c8c8c3; --paper:#fff; --surface:#f4f4f1; --soft:#fafaf8; --ok:#27613e; --ok-bg:#f1f8f3; --ok-line:#9cc4aa; --error:#9d3535; --error-bg:#fdf3f3; --error-line:#d7b0b0; --warn:#8a5a12; --warn-bg:#fdf6ec; --warn-line:#e0c48c; --list-max:280px; }
     * { box-sizing:border-box; }
     body { margin:0; min-width:320px; background:var(--surface); color:var(--ink); font:14px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Microsoft YaHei",sans-serif; -webkit-font-smoothing:antialiased; }
     button { font:inherit; }
@@ -44,7 +44,7 @@
     .account__checkin-reward--ok strong { color:var(--ok); }
     .account__checkin-reward--error { border-color:#d7b0b0; background:#fdf3f3; color:var(--error); }
     .account__actions { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:8px; padding:12px 14px; border-top:1px solid var(--line); border-bottom:1px solid var(--line); background:var(--soft); }
-    .action { min-width:0; height:36px; display:inline-flex; align-items:center; justify-content:center; gap:6px; padding:0 9px; border:1px solid #bdbdb8; border-radius:5px; background:var(--paper); color:var(--ink); font-size:12px; line-height:1; white-space:nowrap; cursor:pointer; transition:background-color 160ms ease,color 160ms ease,border-color 160ms ease; }
+    .action { min-width:0; height:36px; display:inline-flex; align-items:center; justify-content:center; gap:6px; padding:0 10px; border:1px solid #bdbdb8; border-radius:6px; background:var(--paper); color:var(--ink); font-size:12px; line-height:1; white-space:nowrap; cursor:pointer; transition:background-color 160ms ease,color 160ms ease,border-color 160ms ease; }
     .action svg { width:14px; height:14px; flex:none; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
     .action:hover:not(:disabled) { border-color:var(--ink); background:#f0f0ed; }
     .action--primary { border-color:var(--ink); background:var(--ink); color:var(--paper); }
@@ -69,7 +69,7 @@
     .auto-draw__step--failed .auto-draw__status { color:var(--error); }
     .auto-draw__error { margin-top:7px; color:var(--error); font-size:11px; }
     .auto-draw__empty { margin:0; padding:2px 0 8px; color:var(--muted); font-size:11px; }
-    .auto-draw__step .action--compact { margin-top:4px; height:24px; font-size:10px; padding:0 8px; }
+    .auto-draw__step .action--compact { margin-top:4px; height:24px; border-radius:4px; font-size:10px; padding:0 8px; }
     .metrics-groups { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; align-items:start; }
     .metric-group { min-width:0; padding:13px 13px 14px; border:1px solid var(--line); border-radius:6px; background:var(--paper); }
     .balance-section, .token-usage-section, .draw-section, .activity-section { padding-bottom:14px; }
@@ -90,9 +90,10 @@
     .activity-note { margin-top:10px; color:var(--muted); font-size:12px; }
     .activity-note--error { color:var(--error); }
     .purchase-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-top:12px; }
-    .action--purchase { min-height:42px; height:auto; padding:10px 12px; white-space:normal; text-align:center; line-height:1.35; }
-    .action--compact { height:30px; padding:0 10px; font-size:11px; }
+    .action--purchase { min-height:36px; height:auto; padding:8px 12px; white-space:normal; text-align:center; line-height:1.3; }
+    .action--compact { height:36px; padding:0 10px; font-size:11px; }
     .subscriptions { padding-top:1px; }
+    .subscription-list { max-height:var(--list-max); overflow-y:auto; padding-right:2px; }
     .subscription { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:18px; padding:13px 0; border-bottom:1px solid #ebebe8; }
     .subscription:last-child { border-bottom:0; }
     .subscription__plan { font-size:13px; font-weight:620; }
@@ -110,8 +111,14 @@
     .auth-badge--ok { border-color:var(--ok-line); background:var(--ok-bg); color:var(--ok); }
     .auth-badge--error { border-color:#d7b0b0; background:#fdf3f3; color:var(--error); }
     .account__manage { display:flex; flex-wrap:wrap; gap:6px; padding:10px 14px 12px; border-bottom:1px solid var(--line); background:#fcfcfa; }
-    .action--danger { color:var(--error); border-color:#d7b0b0; }
-    .action--danger:hover:not(:disabled) { border-color:var(--error); background:#fdf3f3; }
+    .action--danger { color:var(--error); border-color:var(--error-line); background:var(--error-bg); }
+    .action--danger:hover:not(:disabled) { border-color:var(--error); background:#fcebeb; }
+    .action--tint-ok { color:var(--ok); border-color:var(--ok-line); background:var(--ok-bg); }
+    .action--tint-ok:hover:not(:disabled) { border-color:var(--ok); }
+    .action--tint-ok:disabled { opacity:.7; }
+    .action--tint-warn { color:var(--warn); border-color:var(--warn-line); background:var(--warn-bg); }
+    .action--tint-warn:hover:not(:disabled) { border-color:var(--warn); }
+    .action--tint-warn:disabled { opacity:.7; }
     .account-dialog { border:1px solid var(--line-strong); border-radius:8px; padding:0; min-width:300px; max-width:92vw; }
     .account-dialog::backdrop { background:rgba(23,23,23,.35); }
     .account-dialog form { padding:18px; display:grid; gap:10px; }
@@ -153,7 +160,7 @@
     .runtime-panel__header { min-width:0; display:flex; align-items:flex-start; justify-content:space-between; gap:14px; padding:18px; border-bottom:1px solid var(--line); background:var(--soft); }
     .runtime-panel__title { margin:0; font-size:16px; line-height:1.3; font-weight:690; }
     .runtime-panel__description { margin:4px 0 0; color:var(--muted); font-size:12px; }
-    .runtime-list { min-width:0; }
+    .runtime-list { min-width:0; max-height:var(--list-max); overflow-y:auto; }
     .runtime-state { padding:18px; color:var(--muted); }
     .runtime-state--error { color:var(--error); }
     .runtime-log { padding:14px 18px 15px; border-bottom:1px solid #ebebe8; }
@@ -210,7 +217,7 @@
     .plan-settings svg, .subscription-refresh svg { width:12px; height:12px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
     .plan-list, .subscription-list { display:grid; gap:6px; }
     .plan-row__note { display:block; margin-top:2px; color:var(--muted); font-size:10px; line-height:1.4; overflow-wrap:anywhere; }
-    .plan-list { margin:0; padding:0; list-style:none; }
+    .plan-list { margin:0; padding:0; list-style:none; max-height:var(--list-max); overflow-y:auto; padding-right:2px; }
     .plan-row, .subscription-item { min-width:0; display:grid; grid-template-columns:minmax(0,1fr) auto auto auto; gap:8px; align-items:center; padding:8px 9px; border:1px solid var(--line); border-radius:5px; background:var(--paper); }
     .plan-row__main { min-width:0; }
     .plan-row__mode { display:block; margin-top:2px; color:#8b8b86; font-size:9px; line-height:1.2; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -228,7 +235,7 @@
     .subscription-item__meta { margin-top:2px; color:#8b8b86; font-size:9px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .subscription-item__quota { color:var(--ink); font-size:12px; font-weight:700; font-variant-numeric:tabular-nums; text-align:right; white-space:nowrap; }
     .subscription-item__quota span { display:block; margin-top:2px; color:#8b8b86; font-size:9px; font-weight:450; }
-    .draw-history-list { display:grid; gap:6px; max-height:164px; overflow-y:auto; padding-right:2px; }
+    .draw-history-list { display:grid; gap:6px; max-height:var(--list-max); overflow-y:auto; padding-right:2px; }
     .draw-history-item { min-width:0; padding:8px 9px; border:1px solid var(--line); border-radius:5px; background:var(--paper); }
     .draw-history-item__head { display:flex; align-items:center; gap:6px; min-width:0; }
     .draw-history-item__source { color:var(--muted); font-size:9px; font-weight:550; white-space:nowrap; }
@@ -864,7 +871,7 @@
       const passDisabled = blocked || passUnlocked || passPrice == null;
       const pending = toNumber(activity.purchase_pending) > 0 || toNumber(activity.purchase_unknown) > 0;
       const pendingNote = pending ? '<div class="activity-note">购买结果待确认，暂不允许重复提交。</div>' : '';
-      return `<div class="account__purchase-row"><button class="action action--purchase" type="button" data-purchase-draw="${escapeHTML(account.id)}" ${drawDisabled ? 'disabled' : ''}>${icons.draw}购买 1 抽 · ${escapeHTML(formatUSD(drawPrice))}</button><button class="action action--purchase${passUnlocked ? ' action--done' : ''}" type="button" data-unlock-pass="${escapeHTML(account.id)}" ${passDisabled ? 'disabled' : ''}>${icons.claim}${passUnlocked ? '今日通行证已购买' : `购买通行证 · ${escapeHTML(formatUSD(passPrice))}`}</button></div>${pendingNote}`;
+      return `<div class="account__purchase-row"><button class="action action--purchase action--tint-warn" type="button" data-purchase-draw="${escapeHTML(account.id)}" ${drawDisabled ? 'disabled' : ''}>${icons.draw}购买 1 抽 · ${escapeHTML(formatUSD(drawPrice))}</button><button class="action action--purchase action--tint-warn${passUnlocked ? ' action--done' : ''}" type="button" data-unlock-pass="${escapeHTML(account.id)}" ${passDisabled ? 'disabled' : ''}>${icons.claim}${passUnlocked ? '今日通行证已购买' : `购买通行证 · ${escapeHTML(formatUSD(passPrice))}`}</button></div>${pendingNote}`;
     }
     function renderStatusLine(account) {
       const schedules = scheduleEntries(account);
@@ -906,7 +913,7 @@
       const claimText = account.claiming ? '领取中' : claimDone ? '今日已领取' : account.claim_status === 'unknown' ? '核对结果' : '领取次数';
       const drawText = account.drawing ? '抽奖中' : '手动抽奖';
       const drawCountText = account.querying_draw ? '刷新中' : '刷新次数';
-      return `<article class="account" data-account-id="${escapeHTML(account.id)}"><div class="account__identity"><div class="account__eyebrow"><span class="account__dot"></span>账号 ${escapeHTML(accountCode)}</div><h2 class="account__name">${escapeHTML(account.label || account.id)}</h2><div class="account__user">${escapeHTML(account.masked_login_name || '')}<span class="auth-badge auth-badge--${escapeHTML(authTone(account))}">${escapeHTML(authBadge(account))}</span></div></div>${metrics}<div class="account__actions"><button class="action action--primary" type="button" aria-label="手动抽奖" data-draw="${escapeHTML(account.id)}" ${account.drawing ? 'disabled' : ''}>${icons.draw}${drawText}</button><button class="action${checkedIn ? ' action--done' : ''}" type="button" aria-label="${checkedIn ? '今日已签到' : '执行签到'}" data-checkin="${escapeHTML(account.id)}" ${checkedIn || account.checking_in ? 'disabled' : ''}>${icons.checkin}${checkinText}</button><button class="action" type="button" aria-label="领取每日抽奖次数" data-claim="${escapeHTML(account.id)}" ${claimDone || account.claiming ? 'disabled' : ''}>${icons.claim}${claimText}</button><button class="action action--compact" type="button" data-edit-account="${escapeHTML(account.id)}">${icons.edit}编辑</button><button class="action action--compact" type="button" data-validate-auth="${escapeHTML(account.id)}">${icons.info}检查认证</button><button class="action action--compact" type="button" data-reauthenticate="${escapeHTML(account.id)}">${icons.key}重新认证</button><button class="action action--compact" type="button" data-session-preview="${escapeHTML(account.id)}">${icons.info}会话管理</button><button class="action action--compact action--danger" type="button" data-delete-account="${escapeHTML(account.id)}">${icons.error}删除</button></div>${lower}<div class="account__footer account__status${footerClass}" role="status" aria-live="polite" aria-atomic="true" tabindex="-1" data-status-account="${escapeHTML(account.id)}">${footerIcon}<span>${escapeHTML(footer.message)}</span></div></article>`;
+      return `<article class="account" data-account-id="${escapeHTML(account.id)}"><div class="account__identity"><div class="account__eyebrow"><span class="account__dot"></span>账号 ${escapeHTML(accountCode)}</div><h2 class="account__name">${escapeHTML(account.label || account.id)}</h2><div class="account__user">${escapeHTML(account.masked_login_name || '')}<span class="auth-badge auth-badge--${escapeHTML(authTone(account))}">${escapeHTML(authBadge(account))}</span></div></div>${metrics}<div class="account__actions"><button class="action action--primary" type="button" aria-label="手动抽奖" data-draw="${escapeHTML(account.id)}" ${account.drawing ? 'disabled' : ''}>${icons.draw}${drawText}</button><button class="action action--tint-ok${checkedIn ? ' action--done' : ''}" type="button" aria-label="${checkedIn ? '今日已签到' : '执行签到'}" data-checkin="${escapeHTML(account.id)}" ${checkedIn || account.checking_in ? 'disabled' : ''}>${icons.checkin}${checkinText}</button><button class="action action--tint-ok${claimDone ? ' action--done' : ''}" type="button" aria-label="领取每日抽奖次数" data-claim="${escapeHTML(account.id)}" ${claimDone || account.claiming ? 'disabled' : ''}>${icons.claim}${claimText}</button><button class="action action--compact" type="button" data-edit-account="${escapeHTML(account.id)}">${icons.edit}编辑</button><button class="action action--compact" type="button" data-validate-auth="${escapeHTML(account.id)}">${icons.info}检查认证</button><button class="action action--compact action--tint-warn" type="button" data-reauthenticate="${escapeHTML(account.id)}">${icons.key}重新认证</button><button class="action action--compact" type="button" data-session-preview="${escapeHTML(account.id)}">${icons.info}会话管理</button><button class="action action--compact action--danger" type="button" data-delete-account="${escapeHTML(account.id)}">${icons.error}删除</button></div>${lower}<div class="account__footer account__status${footerClass}" role="status" aria-live="polite" aria-atomic="true" tabindex="-1" data-status-account="${escapeHTML(account.id)}">${footerIcon}<span>${escapeHTML(footer.message)}</span></div></article>`;
     }
     const focusDataKeys = ['refresh', 'checkin', 'claim', 'draw', 'drawCount', 'activity', 'balance', 'tokenUsage', 'purchaseDraw', 'unlockPass'];
     function currentFocusTarget() {

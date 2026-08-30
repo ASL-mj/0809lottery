@@ -1395,7 +1395,7 @@ func TestIndexExposesAccountManagementControls(t *testing.T) {
 		}
 	}
 	for _, feature := range []string{
-		"data-balance", "data-schedule-remove", "data-session-revoke", "data-session-revoke-others", "id=\"schedule-dialog\"", "id=\"schedule-dialog-submit\"", ".plan-list { margin:0; padding:0; list-style:none; }",
+		"data-balance", "data-schedule-remove", "data-session-revoke", "data-session-revoke-others", "id=\"schedule-dialog\"", "id=\"schedule-dialog-submit\"", ".plan-list { margin:0; padding:0; list-style:none; max-height:var(--list-max); overflow-y:auto; padding-right:2px; }",
 		"账户余额", "/api/accounts/", "draw-schedule",
 	} {
 		if !bytes.Contains(indexHTML, []byte(feature)) {

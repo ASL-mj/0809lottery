@@ -158,10 +158,13 @@ type diskState struct {
 	LegacyAuth map[string]AuthState `json:"legacy_auth,omitempty"`
 	// DrawSchedules holds per-account user-defined auto-draw schedules.
 	DrawSchedules map[string][]AutoDrawSchedule `json:"draw_schedules,omitempty"`
-	Actions       map[string]Action             `json:"actions"`
-	Snapshots     map[string]Snapshot           `json:"snapshots"`
-	Plans         map[string]AutoDrawPlan       `json:"plans,omitempty"`
-	Logs          []RuntimeLog                  `json:"logs,omitempty"`
+	// AccountIDSeq is the high-water mark of sequential account codes
+	// (account-a1 …); deleted codes are never reused.
+	AccountIDSeq string                `json:"account_id_seq,omitempty"`
+	Actions      map[string]Action     `json:"actions"`
+	Snapshots    map[string]Snapshot   `json:"snapshots"`
+	Plans        map[string]AutoDrawPlan `json:"plans,omitempty"`
+	Logs         []RuntimeLog          `json:"logs,omitempty"`
 }
 
 // diskStateV3 mirrors the version-3 file shape, where `accounts` held raw
