@@ -642,3 +642,31 @@ func TestSchedulerRunsCheckinTaskToCompletion(t *testing.T) {
 		t.Fatalf("checkin logs = %#v", logs)
 	}
 }
+
+// A scheduled check-in whose saved session was revoked must finish the plan
+// as a Chinese skip instead of a raw failed auth error.
+func TestSchedulerCheckinAuthFailureSkipsSafely(t *testing.T) {
+	store := openAutoDrawTestStore(t)
+	now := autoDrawTime(2026, time.August, 30, 9, 59, 50)
+	scheduler := newCheckinTestScheduler(t, store, &now, func(context.Context, string) (ActionOutcome, error) {
+		return ActionOutcome{Action: state.Action{
+			Status:    state.ActionFailed,
+			Message:   "explicit reauthentication required: refresh rejected",
+			LastError: "explicit reauthentication required: refresh rejected",
+		}}, nil
+	})
+	if err := scheduler.Tick(context.Background()); err != nil {
+		t.Fatalf("planning Tick() error = %v", err)
+	}
+	now = autoDrawTime(2026, time.August, 30, 10, 0, 1)
+	if err := scheduler.Tick(context.Background()); err != nil {
+		t.Fatalf("due Tick() error = %v", err)
+	}
+	plan := findAutoDrawPlan(t, store, now.Format("2006-01-02"), "account-a", "checkin")
+	if plan.Status != state.AutoDrawPlanSkipped || !strings.Contains(plan.Message, "需要重新认证") {
+		t.Fatalf("auth-failure plan = %#v", plan)
+	}
+	if strings.Contains(plan.Message, "explicit reauthentication") {
+		t.Fatalf("plan leaked the internal error text: %s", plan.Message)
+	}
+}

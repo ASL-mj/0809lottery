@@ -364,9 +364,23 @@ func autoTaskExecutionResult(taskType string, outcome DrawAvailableOutcome, task
 			}
 			return state.AutoDrawPlanFailed, autoClaimFailureMessage(taskErr), "", nil
 		}
+		if actionRequiresReauth(ActionOutcome{Action: state.Action{Status: state.ActionFailed, LastError: outcome.Message}}) {
+			return state.AutoDrawPlanSkipped, "登录状态失效，需要重新认证，已跳过每日领取", "", nil
+		}
 		return state.AutoDrawPlanCompleted, "每日抽奖次数领取完成", "", nil
 	}
 	return autoDrawExecutionResult(outcome, taskErr)
+}
+
+// actionRequiresReauth reports whether a task outcome recorded an explicit
+// reauthentication requirement. Runners record auth failures on the returned
+// action instead of returning errors, so the message must be inspected.
+func actionRequiresReauth(outcome ActionOutcome) bool {
+	if outcome.Action.Status != state.ActionFailed {
+		return false
+	}
+	marker := auth.ErrReauthRequired.Error()
+	return strings.Contains(outcome.Action.Message, marker) || strings.Contains(outcome.Action.LastError, marker)
 }
 
 func autoClaimFailureMessage(err error) string {
@@ -480,6 +494,13 @@ func (s *AutoDrawScheduler) executeCheckinPlan(parent context.Context, key strin
 			return
 		}
 		finished, err := s.store.FinishAutoDrawPlan(key, state.AutoDrawPlanFailed, autoDrawFailureMessage(checkinErr), "", nil, executedAt)
+		s.recordCheckinAttempt(finished, err)
+		return
+	}
+	// Check-in records auth failures on the action instead of returning them,
+	// so the outcome must be inspected as well.
+	if outcome.Action.Status == state.ActionFailed && actionRequiresReauth(outcome) {
+		finished, err := s.store.FinishAutoDrawPlan(key, state.AutoDrawPlanSkipped, "登录状态失效，需要重新认证，已跳过本次自动签到", "", nil, executedAt)
 		s.recordCheckinAttempt(finished, err)
 		return
 	}
