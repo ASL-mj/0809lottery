@@ -15,3 +15,4 @@ dist/
 
 # 生产发布脚本仅存本机，不入公共仓库
 /deploy/release.sh
+/deploy/logs/

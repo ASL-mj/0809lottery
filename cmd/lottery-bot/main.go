@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -11,12 +12,17 @@ import (
 	"skyeapi/lottery-bot/internal/config"
 	"skyeapi/lottery-bot/internal/secret"
 	"skyeapi/lottery-bot/internal/state"
+	"skyeapi/lottery-bot/internal/version"
 	"skyeapi/lottery-bot/internal/web"
 )
 
 func main() {
 	if len(os.Args) != 2 {
-		log.Fatal("usage: lottery-bot serve|migrate")
+		log.Fatal("usage: lottery-bot serve|migrate|version")
+	}
+	if os.Args[1] == "version" {
+		fmt.Println(version.Version)
+		return
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -33,7 +39,7 @@ func main() {
 			log.Fatalf("migration failed: %v", err)
 		}
 	default:
-		log.Fatal("usage: lottery-bot serve|migrate")
+		log.Fatal("usage: lottery-bot serve|migrate|version")
 	}
 }
 

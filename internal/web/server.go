@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	_ "embed"
 	"encoding/json"
@@ -20,7 +21,12 @@ import (
 	"skyeapi/lottery-bot/internal/secret"
 	"skyeapi/lottery-bot/internal/service"
 	"skyeapi/lottery-bot/internal/state"
+	"skyeapi/lottery-bot/internal/version"
 )
+
+// versionPlaceholder is replaced with the build-time version whenever an
+// HTML page is served.
+const versionPlaceholder = "__APP_VERSION__"
 
 //go:embed static/index.html
 var indexHTML []byte
@@ -429,7 +435,7 @@ func (s *Server) handleIndex(writer http.ResponseWriter, request *http.Request) 
 	}
 	s.setCSRFCookie(writer)
 	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = writer.Write(indexHTML)
+	_, _ = writer.Write(bytes.ReplaceAll(indexHTML, []byte(versionPlaceholder), []byte(version.Version)))
 }
 
 func (s *Server) handleHealth(writer http.ResponseWriter, request *http.Request) {
@@ -437,7 +443,12 @@ func (s *Server) handleHealth(writer http.ResponseWriter, request *http.Request)
 		writeError(writer, http.StatusMethodNotAllowed, "请求方法不支持")
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]interface{}{"ok": true, "service": "account-workbench", "time": time.Now().UTC()})
+	writeJSON(writer, http.StatusOK, map[string]interface{}{
+		"ok":      true,
+		"service": "account-workbench",
+		"version": version.Version,
+		"time":    time.Now().UTC(),
+	})
 }
 
 func (s *Server) handleDrawCountQuery(writer http.ResponseWriter, request *http.Request) {

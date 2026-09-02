@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
@@ -9,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"skyeapi/lottery-bot/internal/version"
 )
 
 const (
@@ -121,7 +124,7 @@ func (s *Server) handleLogin(writer http.ResponseWriter, request *http.Request) 
 	}
 	s.setCSRFCookie(writer)
 	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = writer.Write(loginHTML)
+	_, _ = writer.Write(bytes.ReplaceAll(loginHTML, []byte(versionPlaceholder), []byte(version.Version)))
 }
 
 func (s *Server) handleAdminLogin(writer http.ResponseWriter, request *http.Request) {
