@@ -76,6 +76,13 @@ func TestAdminAuthLoginCookieAndLogoutLifecycle(t *testing.T) {
 	if session.MaxAge <= 0 {
 		t.Fatalf("session cookie max age = %d", session.MaxAge)
 	}
+	wantMaxAge := int((7 * 24 * time.Hour) / time.Second)
+	if session.MaxAge != wantMaxAge {
+		t.Fatalf("session cookie max age = %d, want %d", session.MaxAge, wantMaxAge)
+	}
+	if delta := session.Expires.Sub(time.Now().UTC()); delta < 6*24*time.Hour || delta > 8*24*time.Hour {
+		t.Fatalf("session cookie expires in %v, want about 7 days", delta)
+	}
 
 	health := httptest.NewRecorder()
 	healthRequest := httptest.NewRequest(http.MethodGet, "http://workbench.test/api/health", nil)
@@ -128,6 +135,71 @@ func TestAdminAuthExpiredSessionIsRejected(t *testing.T) {
 	}
 }
 
+func TestAdminAuthValidCookieRequestRenewsSession(t *testing.T) {
+	server := testServer(t)
+	base := time.Date(2026, time.September, 2, 1, 0, 0, 0, time.UTC)
+	token, expiresAt, err := server.ensureAdminSessions().create(base)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if !expiresAt.Equal(base.Add(adminSessionTTL)) {
+		t.Fatalf("initial expiry = %v, want %v", expiresAt, base.Add(adminSessionTTL))
+	}
+
+	renewed, ok := server.ensureAdminSessions().renew(token, base.Add(2*time.Hour))
+	if !ok || !renewed.Equal(base.Add(2*time.Hour+adminSessionTTL)) {
+		t.Fatalf("renewed expiry = %v, %v", renewed, ok)
+	}
+	if !server.ensureAdminSessions().valid(token, base.Add(2*time.Hour+adminSessionTTL-time.Second)) {
+		t.Fatal("renewed session should remain valid until its new expiry")
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "http://workbench.test/api/health", nil)
+	request.Host = "workbench.test"
+	request.AddCookie(&http.Cookie{Name: adminSessionCookie, Value: token})
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("renewed session health = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	renewedCookie := cookieNamed(recorder.Result().Cookies(), adminSessionCookie)
+	if renewedCookie == nil || renewedCookie.MaxAge != int(adminSessionTTL/time.Second) {
+		t.Fatalf("renewed response cookie = %#v", renewedCookie)
+	}
+}
+
+func TestAdminAuthSlidingSessionExpiresAfterLastAccess(t *testing.T) {
+	server := testServer(t)
+	base := time.Date(2026, time.September, 2, 1, 0, 0, 0, time.UTC)
+	token, _, err := server.ensureAdminSessions().create(base)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	lastAccess := base.Add(6 * 24 * time.Hour)
+	if _, ok := server.ensureAdminSessions().renew(token, lastAccess); !ok {
+		t.Fatal("session renewal at last access failed")
+	}
+	if !server.ensureAdminSessions().valid(token, lastAccess.Add(adminSessionTTL-time.Second)) {
+		t.Fatal("session should be valid before seven days after last access")
+	}
+	if server.ensureAdminSessions().valid(token, lastAccess.Add(adminSessionTTL)) {
+		t.Fatal("session should expire seven days after last access")
+	}
+}
+
+func TestAdminAuthRevokedSessionCannotBeRenewed(t *testing.T) {
+	server := testServer(t)
+	base := time.Date(2026, time.September, 2, 1, 0, 0, 0, time.UTC)
+	token, _, err := server.ensureAdminSessions().create(base)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	server.ensureAdminSessions().revoke(token)
+	if _, ok := server.ensureAdminSessions().renew(token, base.Add(time.Hour)); ok {
+		t.Fatal("revoked session was renewed")
+	}
+}
+
 func TestAdminAuthExplicitBasicAuthRemainsCompatible(t *testing.T) {
 	server := testServer(t)
 	request := httptest.NewRequest(http.MethodGet, "http://workbench.test/api/health", nil)
@@ -140,6 +212,9 @@ func TestAdminAuthExplicitBasicAuthRemainsCompatible(t *testing.T) {
 	}
 	if got := recorder.Header().Get("WWW-Authenticate"); got != "" {
 		t.Fatalf("Basic Auth response sent challenge: %q", got)
+	}
+	if cookie := cookieNamed(recorder.Result().Cookies(), adminSessionCookie); cookie != nil {
+		t.Fatalf("Basic Auth response created a session cookie: %#v", cookie)
 	}
 }
 

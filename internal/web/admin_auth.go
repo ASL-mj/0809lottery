@@ -13,7 +13,7 @@ import (
 
 const (
 	adminSessionCookie = "workbench_session"
-	adminSessionTTL    = 12 * time.Hour
+	adminSessionTTL    = 7 * 24 * time.Hour
 	adminSessionBytes  = 32
 )
 
@@ -58,6 +58,26 @@ func (store *adminSessionStore) valid(token string, now time.Time) bool {
 	return valid
 }
 
+func (store *adminSessionStore) renew(token string, now time.Time) (time.Time, bool) {
+	if strings.TrimSpace(token) == "" {
+		return time.Time{}, false
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	for entry, expiresAt := range store.entries {
+		if !expiresAt.After(now) {
+			delete(store.entries, entry)
+			continue
+		}
+		if subtle.ConstantTimeCompare([]byte(entry), []byte(token)) == 1 {
+			renewed := now.Add(adminSessionTTL)
+			store.entries[entry] = renewed
+			return renewed, true
+		}
+	}
+	return time.Time{}, false
+}
+
 func (store *adminSessionStore) revoke(token string) {
 	if token == "" {
 		return
@@ -70,6 +90,19 @@ func (store *adminSessionStore) revoke(token string) {
 type adminLoginRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
+}
+
+func setAdminSessionCookie(writer http.ResponseWriter, request *http.Request, token string, expiresAt time.Time) {
+	http.SetCookie(writer, &http.Cookie{
+		Name:     adminSessionCookie,
+		Value:    token,
+		Path:     "/",
+		Expires:  expiresAt,
+		MaxAge:   int(adminSessionTTL / time.Second),
+		HttpOnly: true,
+		Secure:   requestIsHTTPS(request),
+		SameSite: http.SameSiteLaxMode,
+	})
 }
 
 func (s *Server) ensureAdminSessions() *adminSessionStore {
@@ -110,16 +143,7 @@ func (s *Server) handleAdminLogin(writer http.ResponseWriter, request *http.Requ
 		writeError(writer, http.StatusInternalServerError, "无法建立工作台会话")
 		return
 	}
-	http.SetCookie(writer, &http.Cookie{
-		Name:     adminSessionCookie,
-		Value:    token,
-		Path:     "/",
-		Expires:  expiresAt,
-		MaxAge:   int(adminSessionTTL / time.Second),
-		HttpOnly: true,
-		Secure:   requestIsHTTPS(request),
-		SameSite: http.SameSiteLaxMode,
-	})
+	setAdminSessionCookie(writer, request, token, expiresAt)
 	writeJSON(writer, http.StatusOK, map[string]interface{}{
 		"ok":       true,
 		"redirect": safeLoginNext(request.URL.Query().Get("next")),
@@ -165,7 +189,23 @@ func (s *Server) validAdminRequest(request *http.Request) bool {
 
 func (s *Server) withAdminAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if isPublicAdminRoute(request) || s.validAdminRequest(request) {
+		if isPublicAdminRoute(request) {
+			next.ServeHTTP(writer, request)
+			return
+		}
+		if request.URL.Path == "/api/admin/logout" && request.Method == http.MethodPost {
+			if s.validAdminRequest(request) {
+				next.ServeHTTP(writer, request)
+				return
+			}
+		} else if cookie, err := request.Cookie(adminSessionCookie); err == nil {
+			if expiresAt, ok := s.ensureAdminSessions().renew(cookie.Value, time.Now().UTC()); ok {
+				setAdminSessionCookie(writer, request, cookie.Value, expiresAt)
+				next.ServeHTTP(writer, request)
+				return
+			}
+		}
+		if username, password, ok := request.BasicAuth(); ok && s.validAdminCredentials(username, password) {
 			next.ServeHTTP(writer, request)
 			return
 		}

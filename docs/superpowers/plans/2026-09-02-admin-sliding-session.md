@@ -16,7 +16,7 @@
 - Modify: `internal/web/admin_auth_test.go`
 - Test: `internal/web/admin_auth_test.go`
 
-- [ ] **Step 1: Add the 7-day cookie assertion to the login lifecycle test**
+- [x] **Step 1: Add the 7-day cookie assertion to the login lifecycle test**
 
 Extend `TestAdminAuthLoginCookieAndLogoutLifecycle` after the existing positive `MaxAge` assertion:
 
@@ -30,7 +30,7 @@ if delta := session.Expires.Sub(time.Now().UTC()); delta < 6*24*time.Hour || del
 }
 ```
 
-- [ ] **Step 2: Add a middleware renewal test**
+- [x] **Step 2: Add a middleware renewal test**
 
 Add `TestAdminAuthValidCookieRequestRenewsSession` that creates a session at `base := time.Date(2026, 9, 2, 1, 0, 0, 0, time.UTC)`, sends a request with the session Cookie, and verifies:
 
@@ -43,11 +43,11 @@ if !ok || !renewed.Equal(base.Add(2*time.Hour + 7*24*time.Hour)) {
 
 The HTTP portion must assert the protected request returns `200`, emits a `workbench_session` Cookie, and its `MaxAge` is exactly `7*24*60*60`.
 
-- [ ] **Step 3: Add a stale-session boundary test**
+- [x] **Step 3: Add a stale-session boundary test**
 
 Add `TestAdminAuthSlidingSessionExpiresAfterLastAccess` that creates a session at `base`, renews it at `base + 6 days`, asserts it is valid at `base + 6 days + 7 days - 1 second`, and asserts it is invalid at `base + 13 days + 1 second`.
 
-- [ ] **Step 4: Run the focused tests and confirm they fail before implementation**
+- [x] **Step 4: Run the focused tests and confirm they fail before implementation**
 
 Run:
 
@@ -62,7 +62,7 @@ Expected: the existing login test fails on the old 12-hour MaxAge and the new re
 **Files:**
 - Modify: `internal/web/admin_auth.go:13-68`
 
-- [ ] **Step 1: Change the shared TTL constant**
+- [x] **Step 1: Change the shared TTL constant**
 
 Replace:
 
@@ -76,7 +76,7 @@ with:
 adminSessionTTL = 7 * 24 * time.Hour
 ```
 
-- [ ] **Step 2: Add the locked renewal operation**
+- [x] **Step 2: Add the locked renewal operation**
 
 Add this method beside `valid`:
 
@@ -110,7 +110,7 @@ The operation must validate, remove expired entries, compare in constant time, a
 - Modify: `internal/web/admin_auth.go:90-125,150-178`
 - Test: `internal/web/admin_auth_test.go`
 
-- [ ] **Step 1: Add a Cookie writer helper**
+- [x] **Step 1: Add a Cookie writer helper**
 
 Add:
 
@@ -126,13 +126,13 @@ func setAdminSessionCookie(writer http.ResponseWriter, request *http.Request, to
 
 Use this helper for successful login and for renewed Cookie sessions so attributes cannot diverge.
 
-- [ ] **Step 2: Change Cookie authentication to return renewal state**
+- [x] **Step 2: Change Cookie authentication to return renewal state**
 
 In `withAdminAuth`, read the Cookie once. When present, call `renew(cookie.Value, now)`. On success, set the renewed Cookie and call the next handler. If it fails, continue to the existing Basic Auth fallback. Do not renew or set a Cookie for Basic Auth.
 
 The control flow must preserve public routes, API JSON 401 responses, HTML redirects, logout behavior, and the existing `validAdminRequest` behavior for callers that only need a boolean.
 
-- [ ] **Step 3: Ensure revoked sessions cannot be renewed**
+- [x] **Step 3: Ensure revoked sessions cannot be renewed**
 
 Keep `revoke` deleting the entry under the same mutex. The renewal test must call `revoke(token)` before a request and assert the request remains unauthenticated.
 
@@ -142,11 +142,11 @@ Keep `revoke` deleting the entry under the same mutex. The renewal test must cal
 - Modify: `README.md:3,21,63-67`
 - Test: `internal/web/admin_auth_test.go`
 
-- [ ] **Step 1: Update administrator session documentation**
+- [x] **Step 1: Update administrator session documentation**
 
 Replace the phrase “本地短期会话 Cookie” with “本地滑动 7 天会话 Cookie”，and document that any authenticated Cookie request extends the session to seven days from that request. State that Basic Auth does not create or extend a Cookie session and process restart still clears in-memory sessions.
 
-- [ ] **Step 2: Run focused and full verification**
+- [x] **Step 2: Run focused and full verification**
 
 Run:
 
@@ -161,7 +161,7 @@ git diff --check
 
 Expected: all commands exit `0`; the focused tests cover login Cookie TTL, sliding renewal, stale expiry, Basic Auth compatibility, logout, and public-route behavior.
 
-- [ ] **Step 3: Review the final diff and commit implementation**
+- [x] **Step 3: Review the final diff and commit implementation**
 
 Run:
 
