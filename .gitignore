@@ -3,6 +3,7 @@ lottery-bot.env
 *.local-overrides.env
 data/
 bin/
+dist/
 
 # OS noise
 .DS_Store
@@ -11,3 +12,6 @@ bin/
 .omx/
 .superpowers/
 .workbuddy/
+
+# 生产发布脚本仅存本机，不入公共仓库
+/deploy/release.sh
